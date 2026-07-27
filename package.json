@@ -27,7 +27,7 @@
     "@floating-ui/dom": "^1.7.4",
     "@fortune-sheet/react": "^1.0.4",
     "@google/generative-ai": "^0.24.1",
-    "@hookform/resolvers": "^5.2.2",
+    "@hookform/resolvers": "^5.5.7",
     "@insforge/sdk": "^1.4.4",
     "@letta-ai/letta-client": "^1.12.1",
     "@llamaindex/liteparse": "^1.4.6",
