@@ -205,7 +205,7 @@ jobs:
         run: docker save shothik-web:${GITHUB_SHA} -o shothik-web-image.tar
 
       - name: Upload image artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: shothik-web-image
           path: shothik-web-image.tar
