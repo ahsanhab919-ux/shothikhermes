@@ -49,6 +49,21 @@ function isDocumentLike(attachment: PendingAttachment): boolean {
   );
 }
 
+function getOrCreateChatDeviceId(userId?: string | null) {
+  if (typeof window === "undefined") return "server";
+
+  const storageKey = `shothik:chat-device:${userId ?? "anonymous"}`;
+  const existing = window.localStorage.getItem(storageKey);
+  if (existing) return existing;
+
+  const next =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `device-${Date.now()}`;
+  window.localStorage.setItem(storageKey, next);
+  return next;
+}
+
 const TURN_PROGRESS_ORDER = ["mode", "queue", "session", "run", "document", "response"] as const;
 
 function upsertProgressItem(
@@ -397,6 +412,27 @@ export default function ChatAgentPage() {
     );
     const slashCommand = parseFlagshipSlashCommand(userText);
     const documentTurn = readyAttachments.some((attachment) => isDocumentLike(attachment)) || Boolean(artifactId);
+    const privacy =
+      slashCommand?.name === "spec" || documentTurn
+        ? {
+            mode: "sensitive" as const,
+            retention: "minimized" as const,
+            containsSensitiveData: true,
+            redactionReason: documentTurn
+              ? "document-context"
+              : "spec-workflow",
+          }
+        : {
+            mode: "standard" as const,
+            retention: "default" as const,
+            containsSensitiveData: false,
+          };
+    const sync = {
+      deviceId: getOrCreateChatDeviceId(user?._id),
+      platform: "web",
+      sequence: Date.now(),
+      clientTimestamp: Date.now(),
+    };
 
     if (slashCommand?.name === "spec" && !slashCommand.argument && readyAttachments.length === 0) {
       setComposerError("`/spec` needs a prompt or an attached document.");
@@ -503,6 +539,8 @@ export default function ChatAgentPage() {
         metadata: {
           ...(attachmentMeta.length ? { attachments: attachmentMeta } : {}),
           ...(slashCommand ? { slashCommand } : {}),
+          privacy,
+          sync,
         },
         createdAt: Date.now(),
         updatedAt: Date.now(),
@@ -521,6 +559,8 @@ export default function ChatAgentPage() {
           workspaceId: workspaceId ?? undefined,
           artifactId: artifactId ?? undefined,
           slashCommand: slashCommand ?? undefined,
+          privacy,
+          sync,
           statusLabel: initialStatus,
           progress: initialProgress,
         },
@@ -561,6 +601,8 @@ export default function ChatAgentPage() {
           // Document intelligence: signal an ingest intent when the turn
           // carries a document attachment, and pass the current artifactId
           // so follow-up turns can reference the durable document artifact.
+          privacy,
+          sync,
           documentIntent:
             documentTurn
               ? "ingest"

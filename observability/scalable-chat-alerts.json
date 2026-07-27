@@ -1,0 +1,80 @@
+{
+  "service": "scalable-chat",
+  "metricsEndpoint": "/api/health?metrics=true",
+  "runtimeAlerts": [
+    {
+      "name": "chat-p95-latency-high",
+      "metric": "chat.request.duration_ms.p95",
+      "source": "runtime-metrics",
+      "operator": ">",
+      "threshold": 2500,
+      "window": "10m",
+      "severity": "warning",
+      "response": "Check recent deploys, upstream model latency, and chat.orchestrator errors."
+    },
+    {
+      "name": "chat-5xx-rate-high",
+      "metric": "chat.responses.5xx / chat.requests.total",
+      "source": "runtime-metrics",
+      "operator": ">",
+      "threshold": 0.02,
+      "window": "10m",
+      "severity": "critical",
+      "response": "Inspect app logs and health chatRuntime summary for orchestrator or auth regressions."
+    },
+    {
+      "name": "chat-rate-limit-surge",
+      "metric": "chat.responses.429 / chat.requests.total",
+      "source": "runtime-metrics",
+      "operator": ">",
+      "threshold": 0.1,
+      "window": "5m",
+      "severity": "warning",
+      "response": "Review ingress policy, abusive traffic, and plan-tier throttling."
+    },
+    {
+      "name": "chat-usage-tracking-failures",
+      "metric": "llm.usage.track.failure",
+      "source": "runtime-metrics",
+      "operator": ">",
+      "threshold": 0,
+      "window": "15m",
+      "severity": "warning",
+      "response": "Verify Convex connectivity before cost accounting drifts from runtime traffic."
+    }
+  ],
+  "costMonitoring": {
+    "runtime": [
+      {
+        "metric": "llm.usage.cost_usd.total",
+        "purpose": "Process-local spend during active validation windows"
+      },
+      {
+        "metric": "llm.usage.cost_usd.per_call.p95",
+        "operator": ">",
+        "threshold": 0.12,
+        "window": "30m",
+        "severity": "warning",
+        "response": "Check model routing, token inflation, or prompt regressions."
+      }
+    ],
+    "durable": [
+      {
+        "source": "convex.llmUsage.getTotalSpend",
+        "daysBack": 1,
+        "warningUsd": 20,
+        "criticalUsd": 40
+      },
+      {
+        "source": "convex.llmUsage.getSpendByTool",
+        "daysBack": 7,
+        "review": "Look for unexpected cost concentration in a single chat tool or model adapter."
+      },
+      {
+        "source": "convex.llmUsage.getSpendByUser",
+        "daysBack": 7,
+        "review": "Use for abuse, quota, or enterprise chargeback review."
+      }
+    ]
+  }
+}

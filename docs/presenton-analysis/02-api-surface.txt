@@ -1,0 +1,607 @@
+================================================================================
+DOMAIN 2: COMPLETE API SURFACE OF THE PRESENTON FASTAPI BACKEND
+================================================================================
+Implementation-grade reference for every HTTP endpoint, schema, auth mechanism,
+and external integration exposed by servers/fastapi.
+
+--------------------------------------------------------------------------------
+0. TOPOLOGY
+--------------------------------------------------------------------------------
+
+Entry point:  servers/fastapi/api/main.py
+- FastAPI app `app` with lifespan `app_lifespan`.
+- Routers mounted at root (each router carries its own prefix):
+    API_V1_PPT_ROUTER        prefix=/api/v1/ppt
+    API_V1_WEBHOOK_ROUTER    prefix=/api/v1/webhook
+    API_V1_MOCK_ROUTER       prefix=/api/v1/mock
+    API_V1_AUTH_ROUTER       prefix=/api/v1/auth
+    API_V1_ASYNC_TASKS_ROUTER prefix=/api/v1/async-tasks
+- Static mounts:
+    /app_data  -> StaticFiles(directory=<APP_DATA_DIR>)  (images, fonts, exports, pptx-to-html)
+    /static    -> StaticFiles(directory=<resource>/static) (icons, etc.)
+- Middleware stack (outermost first):
+    CORSMiddleware (allow_origins=[NEXT_PUBLIC_URL] or ["*"]; allow_credentials=True)
+    UserConfigEnvUpdateMiddleware  (refreshes process env from userConfig.json each request)
+    SessionAuthMiddleware          (enforces session/basic auth on /api/*, /app_data/*, /docs)
+    static_icon_fallback_middleware (http)  (serves icon fallbacks)
+
+All PPT sub-routers share prefix /api/v1/ppt; each adds its own sub-prefix.
+
+--------------------------------------------------------------------------------
+1. AUTHENTICATION
+--------------------------------------------------------------------------------
+
+1.1  Auth middleware (api/middlewares.py -> SessionAuthMiddleware)
+- Skipped entirely when env DISABLE_AUTH=true (returns "electron" user).
+- Paths requiring auth:
+    - All /api/* paths except /api/v1/auth/*
+    - All /app_data/* except public prefixes:
+        /app_data/images/, /app_data/fonts/, /app_data/pptx-to-html/
+    - /docs, /openapi.json, /redoc
+- Accepts, in order of preference:
+    (a) Session cookie `presenton_session` (validated as a signed token).
+    (b) Authorization: Bearer <token> header.
+    (c) Authorization: Basic <base64(user:pass)> header (verified against
+        PBKDF2 hash stored in userConfig.json).
+- If no credentials configured yet, returns 428 with setup_required=true.
+
+1.2  Session tokens (utils/simple_auth.py)
+- Token format:  base64url(payload_json) + "." + base64url(hmac_sha256_sig)
+- Payload: {"v":1, "u":<username>, "iat":<unix>, "exp":<unix+30d>}
+- Signing secret: AUTH_SECRET_KEY in userConfig.json (auto-generated, 32 random bytes).
+- TTL: 30 days (SESSION_TTL_SECONDS = 60*60*24*30).
+- Cookie attributes: HttpOnly, SameSite=Lax, Secure when HTTPS, Path=/, max_age=30d.
+- Password storage: pbkdf2_sha256 with 200,000 iterations, 16-byte random salt.
+- Internal service-to-service headers via get_internal_auth_headers(): mints a
+  bearer token for the configured user (used by headless browser export).
+
+1.3  Codex OAuth (utils/oauth/openai_codex.py + utils/oauth/pkce.py)
+- Provider: OpenAI / ChatGPT (used for the "codex" LLM provider).
+- Authorization server: https://auth.openai.com/oauth/authorize
+- Token server:        https://auth.openai.com/oauth/token
+- Client ID:           app_EMoamEEZ73f0CkXaXp7hrann
+- Redirect URI:        http://localhost:1455/auth/callback
+- Scopes:              openid profile email offline_access
+- PKCE:                S256, 32-byte verifier.
+- Local callback: HTTPServer bound to 0.0.0.0:1455 in daemon thread.
+- Token exchange: httpx POST form with grant_type=authorization_code.
+- Refresh: httpx POST form with grant_type=refresh_token.
+- Token persistence: env vars + userConfig.json.
+
+--------------------------------------------------------------------------------
+2. ENDPOINTS — /api/v1/auth
+--------------------------------------------------------------------------------
+
+2.1  GET /api/v1/auth/status
+  Response: {configured: bool, authenticated: bool, username: str|null}
+
+2.2  GET /api/v1/auth/verify
+  Response: {authenticated: bool, username: str}
+  Errors: 401 if not configured or unauthenticated.
+
+2.3  POST /api/v1/auth/setup
+  Body: AuthCredentialsRequest {username: str (3..128), password: str (6..256)}
+  Response: {configured: true, authenticated: false, username: str}
+  Errors: 409 if already configured; 400 on validation failure.
+
+2.4  POST /api/v1/auth/login
+  Body: AuthCredentialsRequest {username, password}
+  Response: {configured: true, authenticated: true, username: str,
+             access_token: str, token_type: "bearer"}
+  Sets cookie: presenton_session=<token>
+  Errors: 428 if not configured; 401 if credentials invalid.
+
+2.5  POST /api/v1/auth/logout
+  Response: {success: true}
+  Clears cookie: presenton_session.
+
+--------------------------------------------------------------------------------
+3. ENDPOINTS — /api/v1/async-tasks
+--------------------------------------------------------------------------------
+
+3.1  GET /api/v1/async-tasks
+  Query: type, status, created_at, created_at_from, created_at_to,
+         order_by ("created_at"|"updated_at"), order ("asc"|"desc"),
+         limit (1..200, default 50), offset (>=0, default 0)
+  Response: list[AsyncTaskModel]
+
+3.2  GET /api/v1/async-tasks/status/{id}
+  Path: id: str
+  Response: AsyncTaskModel
+
+--------------------------------------------------------------------------------
+4. ENDPOINTS — /api/v1/webhook
+--------------------------------------------------------------------------------
+
+4.1  POST /api/v1/webhook/subscribe  (status 201)
+  Body: {url: str, secret: str|None, event: WebhookEvent}
+  Response: {id: str}
+
+4.2  DELETE /api/v1/webhook/unsubscribe  (status 204)
+  Body (embed): {id: str}
+
+--------------------------------------------------------------------------------
+5. ENDPOINTS — /api/v1/mock
+--------------------------------------------------------------------------------
+
+5.1  GET /api/v1/mock/presentation-generation-completed
+  Response: list[PresentationPathAndEditPath]  (mock)
+
+5.2  GET /api/v1/mock/presentation-generation-failed
+  Response: list[APIErrorModel]  (mock, status 500)
+
+--------------------------------------------------------------------------------
+6. ENDPOINTS — /api/v1/ppt
+--------------------------------------------------------------------------------
+
+================================================================================
+6.1  FILES  (prefix /files)
+================================================================================
+
+6.1.1  POST /api/v1/ppt/files/upload
+  Request: multipart form `files: Optional[List[UploadFile]]`
+  Validation: max 100 MB per file; accepted types = UPLOAD_ACCEPTED_FILE_TYPES
+  Response: List[str]  // temp file paths
+
+6.1.2  POST /api/v1/ppt/files/decompose
+  Body (embed): {file_paths: List[str], language: str|None}
+  Response: List[DecomposedFileInfo]  // {name, file_path}
+
+6.1.3  POST /api/v1/ppt/files/update
+  Request: multipart form `file_path: str`, `file: UploadFile`
+  Response: {message: "File updated successfully"}
+
+================================================================================
+6.2  FONTS  (prefix /fonts)
+================================================================================
+
+6.2.1  POST /api/v1/ppt/fonts/upload
+  Request: multipart `font_file: UploadFile` (.ttf,.otf,.woff,.woff2,.eot)
+  Response: FontUploadResponse {success, font_name, font_url, font_path, message}
+
+6.2.2  GET /api/v1/ppt/fonts/list
+  Response: FontListResponse {success, fonts: List[...]}
+
+6.2.3  GET /api/v1/ppt/fonts/uploaded
+  Response: UploadedFontsResponse {fonts: List[{id, name, url}]}
+
+6.2.4  POST /api/v1/ppt/fonts/check
+  Response: FontCheckResponse
+
+6.2.5  DELETE /api/v1/ppt/fonts/delete/{filename}
+  Response: {success: bool, message: str}
+
+================================================================================
+6.3  OUTLINES  (prefix /outlines)
+================================================================================
+
+6.3.1  GET /api/v1/ppt/outlines/{id}
+  Path: id: uuid.UUID
+  Response: PresentationOutlineModel
+
+6.3.2  PUT /api/v1/ppt/outlines/{id}
+  Body: PresentationOutlineModel
+  Response: PresentationOutlineModel
+
+6.3.3  GET /api/v1/ppt/outlines/stream/{id}  (SSE)
+  Response: text/event-stream
+  SSE events: {type:"status"}, {type:"chunk"}, {type:"error"}, {type:"complete"}
+
+================================================================================
+6.4  SLIDE  (prefix /slide)
+================================================================================
+
+6.4.1  POST /api/v1/ppt/slide/edit
+  Body (embed): {id: uuid.UUID, prompt: str}
+  Response: SlideModel
+
+6.4.2  POST /api/v1/ppt/slide/edit-html
+  Body (embed): {id: uuid.UUID, prompt: str, html: str|None}
+  Response: SlideModel
+
+================================================================================
+6.5  IMAGES  (prefix /images)
+================================================================================
+
+6.5.1  GET /api/v1/ppt/images/search
+  Query: query, limit (1..30), provider ("pexels"|"pixabay"|None), strict_api_key
+  Response: List[str]
+  External: Pexels API, Pixabay API.
+
+6.5.2  GET /api/v1/ppt/images/generate
+  Query: prompt: str
+  Response: str (image URL) or ImageAsset dict
+  External: Gemini Flash, NanoBanana Pro, DALL-E 3, GPT Image 1.5, ComfyUI, etc.
+
+6.5.3  GET /api/v1/ppt/images/generated
+  Response: List[{id, created_at, is_uploaded, path, extras, file_url}]
+
+6.5.4  POST /api/v1/ppt/images/upload
+  Request: multipart `file: UploadFile` (image types, PIL verify)
+  Response: {id, created_at, is_uploaded, path, extras, file_url}
+
+6.5.5  GET /api/v1/ppt/images/uploaded
+  Response: List[{id, created_at, is_uploaded, path, extras, file_url}]
+
+6.5.6  DELETE /api/v1/ppt/images/{id}  (status 204)
+
+================================================================================
+6.6  ICONS  (prefix /icons)
+================================================================================
+
+6.6.1  GET /api/v1/ppt/icons/search
+  Query: query, limit (default 20), icon_type, icon_weight
+  Response: List[str]  // icon URLs (local Phosphor icon set)
+
+================================================================================
+6.7  OLLAMA  (prefix /ollama)
+================================================================================
+
+6.7.1  GET /api/v1/ppt/ollama/models/supported
+  Response: List[OllamaModelMetadata]
+
+6.7.2  GET /api/v1/ppt/ollama/models/available
+  Query: ollama_url: str|None
+  Response: List[OllamaModelStatus]
+  External: Ollama API (GET /api/tags).
+
+6.7.3  GET /api/v1/ppt/ollama/models/library
+  Response: dict (cached Ollama library catalog)
+
+6.7.4  POST /api/v1/ppt/ollama/models/pull  (SSE)
+  Query: model_name, ollama_url
+  External: Ollama API (POST /api/pull with stream=true).
+
+================================================================================
+6.8  OPENAI  (prefix /openai)
+================================================================================
+
+6.8.1  POST /api/v1/ppt/openai/models/available
+  Body: {url: str, api_key: str}
+  Response: List[str]
+  External: GET {url}/models with Bearer auth.
+
+================================================================================
+6.9  ANTHROPIC  (prefix /anthropic)
+================================================================================
+
+6.9.1  POST /api/v1/ppt/anthropic/models/available
+  Body (embed): {api_key: str}
+  Response: List[str]
+  External: Anthropic API (GET https://api.anthropic.com/v1/models).
+
+================================================================================
+6.10  GOOGLE  (prefix /google)
+================================================================================
+
+6.10.1 POST /api/v1/ppt/google/models/available
+  Body (embed): {api_key: str}
+  Response: List[str]
+  External: Google Generative Language API.
+
+================================================================================
+6.11  CODEX AUTH  (prefix /codex/auth)
+================================================================================
+
+6.11.1 POST /api/v1/ppt/codex/auth/initiate
+  Response: InitiateResponse {session_id, url, instructions}
+
+6.11.2 GET /api/v1/ppt/codex/auth/status/{session_id}
+  Response: StatusResponse {status, account_id, username, email, is_pro, detail}
+
+6.11.3 POST /api/v1/ppt/codex/auth/exchange
+  Body: ExchangeRequest {session_id, code}
+  Response: ExchangeResponse {account_id, username, email, is_pro}
+
+6.11.4 POST /api/v1/ppt/codex/auth/refresh
+  Response: RefreshResponse {account_id, username, email, is_pro, detail}
+
+6.11.5 GET /api/v1/ppt/codex/auth/status
+  Response: StatusResponse {status, account_id, username, email, is_pro, detail}
+
+6.11.6 POST /api/v1/ppt/codex/auth/logout
+  Response: {detail: "Logged out successfully"}
+
+================================================================================
+6.12  PRESENTATION  (prefix /presentation)
+================================================================================
+
+6.12.1 GET /api/v1/ppt/presentation/all
+  Query: version, include_slides (default true)
+  Response: List[PresentationWithSlides]
+
+6.12.2 GET /api/v1/ppt/presentation/{id}
+  Response: PresentationWithSlides
+
+6.12.3 DELETE /api/v1/ppt/presentation/{id}  (status 204)
+
+6.12.4 POST /api/v1/ppt/presentation/{id}/duplicate
+  Response: PresentationWithSlides
+
+6.12.5 POST /api/v1/ppt/presentation/create
+  Body: {content, n_slides, language, file_paths, tone, verbosity,
+         instructions, include_table_of_contents, include_title_slide, web_search}
+  Response: PresentationModel
+
+6.12.6 POST /api/v1/ppt/presentation/prepare
+  Body: {presentation_id, outlines, layout, title}
+  Response: PresentationPrepareResponse {presentation_id}
+
+6.12.7 POST /api/v1/ppt/presentation/generate  (synchronous)
+  Body: GeneratePresentationRequest
+  Response: PresentationPathAndEditPath
+  Full pipeline: validate -> outlines -> structure -> slide content ->
+    assets -> persist -> export -> return paths.
+
+6.12.8 POST /api/v1/ppt/presentation/generate/async  (status 201)
+  Body: GeneratePresentationRequest
+  Response: AsyncTaskModel
+
+6.12.9 GET /api/v1/ppt/presentation/status/{id}
+  Path: id: str (task ID)
+  Response: AsyncTaskModel
+
+6.12.10 POST /api/v1/ppt/presentation/edit
+  Body: EditPresentationRequest {presentation_id, slides, export_as}
+  Response: PresentationPathAndEditPath
+
+6.12.11 POST /api/v1/ppt/presentation/derive
+  Body: EditPresentationRequest
+  Response: PresentationPathAndEditPath
+
+6.12.12 PATCH /api/v1/ppt/presentation/slides_update
+  Body (embed): {slide: SlideModel}
+  Response: SlideModel
+
+6.12.13 POST /api/v1/ppt/presentation/slides/create
+  Body: slides: List[SlideModel]
+  Response: PresentationWithSlides
+
+================================================================================
+6.13  THEMES  (prefix /themes)
+================================================================================
+
+6.13.1 GET /api/v1/ppt/themes/default
+  Response: List[dict]  // always [] (built-in themes are client-side)
+
+6.13.2 GET /api/v1/ppt/themes/all
+  Response: List[ThemeResponse]
+
+6.13.3 POST /api/v1/ppt/themes/create
+  Body: ThemeRequest {name, description, company_name, logo, logo_url, data}
+  Response: ThemeResponse
+
+6.13.4 PATCH /api/v1/ppt/themes/update/{theme_id}
+  Body: ThemeUpdateRequest
+  Response: ThemeResponse
+
+6.13.5 DELETE /api/v1/ppt/themes/delete/{theme_id}  (status 204)
+
+================================================================================
+6.14  THEME GENERATE  (prefix /theme)
+================================================================================
+
+6.14.1 POST /api/v1/ppt/theme/generate
+  Body: GenerateThemeRequestV3 {primary, background, accent_1, accent_2,
+        text_1, text_2 — all Optional[str]}
+  Response: ThemeData {primary, background, card, stroke, background_text,
+                       primary_text, graph_0..graph_9}
+
+================================================================================
+6.15  CHAT  (prefix /chat)
+================================================================================
+
+6.15.1 GET /api/v1/ppt/chat/conversations
+  Query: presentation_id
+  Response: List[ChatConversationListItem]
+
+6.15.2 GET /api/v1/ppt/chat/history
+  Query: presentation_id, conversation_id
+  Response: ChatHistoryResponse
+
+6.15.3 DELETE /api/v1/ppt/chat/conversation  (status 204)
+  Query: presentation_id, conversation_id
+
+6.15.4 POST /api/v1/ppt/chat/message
+  Body: ChatMessageRequest {presentation_id, message (1..8000),
+        conversation_id, attachments (max 8)}
+  Response: ChatMessageResponse {conversation_id, response, tool_calls}
+
+6.15.5 POST /api/v1/ppt/chat/message/stream  (SSE)
+  Body: ChatMessageRequest
+  SSE events: {type:"chunk"}, {type:"status"}, {type:"trace"},
+              {type:"error"}, {type:"complete"}
+
+================================================================================
+6.16  TEMPLATE  (prefix /template)
+================================================================================
+
+6.16.1 GET /api/v1/ppt/template/all
+  Query: page, page_size, default
+  Response: TemplateListResponse {items, total, page, page_size}
+
+6.16.2 POST /api/v1/ppt/template/fonts-upload-and-slides-preview
+  Request: multipart (pptx_file, font_files, google_font mappings)
+  Response: FontsUploadAndSlidesPreviewResponse
+
+6.16.3 POST /api/v1/ppt/template/init  (status 201)
+  Body: InitTemplateRequest
+  Response: str  // new template ID
+
+6.16.4 POST /api/v1/ppt/template/async  (status 201)
+  Body: CreateTemplateRequest
+  Response: AsyncTaskModel
+
+6.16.5 POST /api/v1/ppt/template/layouts/create
+  Body: CreateTemplateLayoutsRequest {template_id, layout_indices}
+  Response: CreateTemplateLayoutsResponse
+
+6.16.6 POST /api/v1/ppt/template/generate-blocks
+  Body: GenerateTemplateBlocksRequest {template_id}
+  Response: TemplateResponse
+
+6.16.7 PATCH /api/v1/ppt/template/{template_id}/layouts
+  Body: PatchTemplateSlideLayoutRequest
+  Response: TemplateResponse
+
+6.16.8 PATCH /api/v1/ppt/template/{template_id}
+  Body: UpdateTemplateMetadataRequest
+  Response: TemplateResponse
+
+6.16.9 GET /api/v1/ppt/template/{template_id}
+  Response: TemplateResponse
+
+6.16.10 DELETE /api/v1/ppt/template/{template_id}  (status 204)
+
+================================================================================
+6.17  LAYOUTS  (prefix /layouts)
+================================================================================
+
+6.17.1 GET /api/v1/ppt/layouts/
+  Response: dict (proxied from Next.js at localhost:3000/api/layouts)
+
+6.17.2 GET /api/v1/ppt/layouts/{layout_name}
+  Response: PresentationLayoutModel
+
+--------------------------------------------------------------------------------
+7. PYDANTIC MODELS (models/*.py)
+--------------------------------------------------------------------------------
+
+7.1  APIErrorModel: {status_code: int, detail: str}
+7.2  ChatAttachment: {type: "document", name: str, file_path: str, mime_type: str|None}
+7.3  ChatMessageRequest: {presentation_id, message (1..8000), conversation_id, attachments (max 8)}
+7.4  ChatMessageResponse: {conversation_id, response, tool_calls}
+7.5  DecomposedFileInfo: {name: str, file_path: str}
+7.6  DocumentChunk: {heading, content, heading_index, score}
+7.7  GeneratePresentationRequest: {content, slides_markdown, instructions, tone,
+     verbosity, web_search, n_slides, language, template, include_table_of_contents,
+     include_title_slide, files, export_as, trigger_webhook}
+7.8  ImagePrompt: {prompt: str, theme_prompt: str|None}
+7.9  OllamaModelMetadata: {label, value, size, tested}
+7.10 OllamaModelStatus: {name, parameters, size, downloaded, status, done, error}
+7.11 PresentationAndPath: {presentation_id, path}
+7.12 PresentationPathAndEditPath: + edit_path
+7.13 PresentationOutlineModel: {slides: List[SlideOutlineModel]}
+7.14 SlideOutlineModel: {content: str} (validated by normalize_outline_content)
+7.15 PresentationStructureModel: {slides: List[int]}
+7.16 PresentationWithSlides: {id, version, content, n_slides, language, title,
+     created_at, updated_at, tone, verbosity, slides, fonts}
+7.16 SlideLayoutModel: {id, name, description, json_schema}
+7.17 PresentationLayoutModel: {name, ordered, icon_type, slides, template_id}
+7.18 SSEResponse variants: SSEResponse, SSEStatusResponse, SSETraceResponse,
+     SSEErrorResponse, SSECompleteResponse
+7.19 ThemeData: {primary, background, card, stroke, background_text, primary_text,
+     graph_0..graph_9} — 16 hex colors
+7.20 GeneratedColorPalette: {primary, background, accent_1, accent_2, text_1, text_2,
+     plus 10 lightness variations each}
+7.21 UserConfig: large flat model mirroring userConfig.json — LLM provider
+     sections, image settings, reasoning, web search, Codex OAuth fields.
+
+--------------------------------------------------------------------------------
+8. SQL MODELS (models/sql/*.py) — 14 TABLES
+--------------------------------------------------------------------------------
+
+All SQLModel table=True. Database: SQLite (aiosqlite) by default, PostgreSQL/MySQL supported.
+
+8.1  presentations (PresentationModel): id, version, content, n_slides, language,
+     title, file_paths, outlines, created_at, updated_at, layout, structure,
+     instructions, tone, verbosity, include_table_of_contents, include_title_slide,
+     web_search, theme, fonts
+8.2  slides (SlideModel): id, presentation (FK CASCADE), layout_group, layout,
+     index, content, html_content, speaker_note, properties, ui
+8.3  template_v2 (TemplateV2): id, name, description, raw_layouts, components,
+     merged_components, layouts, assets, is_default, created_at, updated_at
+8.4  async_tasks (AsyncTaskModel): id, type, status, message, error, data,
+     created_at, updated_at
+8.5  async_presentation_generation_tasks (legacy): id, status, message, error,
+     created_at, updated_at, data
+8.6  chat_history_messages (ChatHistoryMessageModel): id, presentation_id (FK CASCADE),
+     template_v2_id (FK CASCADE), conversation_id, position, role, content,
+     created_at, tool_calls
+8.7  image_assets (ImageAsset): id, created_at, is_uploaded, path, extras
+8.8  font_uploads (FontUpload): id, created_at, filename, path,
+     normalized_family_name (indexed), family_name, subfamily_name, full_name,
+     postscript_name, weight_class, width_class, format, size_bytes, extras
+8.9  key_value (KeyValueSqlModel): id, key (indexed), value (JSON)
+8.10 ollama_pull_statuses (OllamaPullStatus): id, last_updated, status (JSON)
+8.11 templates (TemplateModel, legacy v1): id, name, description, created_at
+8.12 template_create_infos: id, fonts, pptx_url, slide_htmls, slide_image_urls, created_at
+8.13 presentation_layout_codes: id, presentation, layout_id, layout_name,
+     layout_code (Text — TSX/React), fonts, created_at, updated_at
+8.14 webhook_subscriptions: id, created_at, url, secret, event (indexed)
+
+--------------------------------------------------------------------------------
+9. ENUMS
+--------------------------------------------------------------------------------
+
+9.1  AsyncTaskStatus: PENDING, COMPLETED, ERROR
+9.2  ImageProvider: PEXELS, PIXABAY, GEMINI_FLASH, NANOBANANA_PRO, DALLE3,
+     GPT_IMAGE_1_5, COMFYUI, OPEN_WEBUI, OPENAI_COMPATIBLE
+9.3  LLMCallType: UNSTRUCTURED, UNSTRUCTURED_STREAM, STRUCTURED, STRUCTURED_STREAM
+9.4  LLMProvider: OLLAMA, DEEPSEEK, OPENAI, GOOGLE, VERTEX, AZURE, BEDROCK,
+     OPENROUTER, FIREWORKS, TOGETHER, CEREBRAS, ANTHROPIC, LITELLM, LMSTUDIO,
+     CUSTOM, CODEX
+9.5  Tone: DEFAULT, CASUAL, PROFESSIONAL, FUNNY, EDUCATIONAL, SALES_PITCH
+9.6  Verbosity: CONCISE, STANDARD, TEXT_HEAVY
+9.7  WebSearchProvider: AUTO, NATIVE, SEARXNG, TAVILY, EXA, BRAVE, SERPER
+9.8  WebhookEvent: PRESENTATION_GENERATION_COMPLETED, PRESENTATION_GENERATION_FAILED
+9.9  PresentationVersion: V1_STANDARD, V2_STANDARD
+
+--------------------------------------------------------------------------------
+10. EXTERNAL INTEGRATIONS SUMMARY
+--------------------------------------------------------------------------------
+
+10.1 LLM Providers (via llmai library)
+  OpenAI, Anthropic, Google Gemini, Vertex AI, Azure OpenAI, Amazon Bedrock,
+  OpenRouter, Fireworks, Together AI, Cerebras, DeepSeek, LiteLLM, LM Studio,
+  Ollama, Custom OpenAI-compatible, Codex/ChatGPT (OAuth)
+
+10.2 Image Providers
+  Pexels, Pixabay, Google Gemini Flash, NanoBanana Pro, DALL-E 3,
+  GPT Image 1.5, ComfyUI, Open WebUI, OpenAI-compatible
+
+10.3 Icon Service
+  Local Phosphor icon set with fastembed vector search (no external API)
+
+10.4 Web Search Providers
+  Native (model-native), SearXNG, Tavily, Exa, Brave, Serper
+
+10.5 OAuth / Identity
+  OpenAI / ChatGPT (auth.openai.com) for Codex provider
+
+10.6 Document Processing
+  @llamaindex/liteparse (Node.js), pdfplumber, Pillow, OfficeDocumentService
+
+10.7 Export Runtime
+  Node.js + Puppeteer (headless Chromium), PyInstaller-compiled convert binary
+
+10.8 Memory / Context Store
+  mem0 OSS (Qdrant + fastembed + spaCy)
+
+10.9 Observability
+  Sentry (optional, SENTRY_DSN env)
+
+10.10 Internal Service-to-Service
+  Layouts endpoint proxies to localhost:3000 (Next.js)
+  Export pipeline calls back into FastAPI + Next.js for headless rendering
+
+--------------------------------------------------------------------------------
+11. AUTH REQUIREMENTS PER ENDPOINT GROUP
+--------------------------------------------------------------------------------
+
+- /api/v1/auth/*:                    EXEMPT from SessionAuthMiddleware.
+- /api/v1/async-tasks/*:             Session OR Basic auth required.
+- /api/v1/webhook/*:                 Session OR Basic auth required.
+- /api/v1/mock/*:                    Session OR Basic auth required.
+- /api/v1/ppt/*:                     Session OR Basic auth required.
+- /app_data/images/, /fonts/, /pptx-to-html/: PUBLIC.
+- /app_data/{exports,...}:           Session OR Basic auth required.
+- /docs, /openapi.json, /redoc:      Session OR Basic auth required.
+- DISABLE_AUTH=true:                 All auth bypassed; user="electron".
+
+Codex OAuth (/api/v1/ppt/codex/auth/*) is protected by session auth but
+manages a SEPARATE OAuth flow with OpenAI for Codex LLM credentials.
+
+================================================================================
+END OF DOMAIN 2 ANALYSIS
+================================================================================

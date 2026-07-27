@@ -13,7 +13,7 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
 import { Loader2, Pause, Play, Square } from 'lucide-react';
-import { useHermesRun, useHermesRunStream } from '@/lib/hermes/hooks';
+import { useHermesRun, useHermesRunStream, useControlHermesRun, type RunAction } from '@/lib/hermes/hooks';
 import type { RunId, HermesRun } from '@/lib/hermes/contracts/core';
 
 interface RunStreamEventItem {
@@ -165,6 +165,7 @@ export function RunStream({ runId, autoScroll = true }: RunStreamProps) {
           </CardTitle>
           
           <div className="flex items-center gap-2">
+            <RunControls runId={run.id} status={run.status} canResume={runContext.canResume} />
             <Badge 
               variant="secondary" 
               className={`${getStatusColor(run.status)} text-white border-0`}
@@ -242,19 +243,17 @@ interface RunControlsProps {
 }
 
 export function RunControls({ runId, status, canResume }: RunControlsProps) {
-  const [isLoading, setIsLoading] = useState(false);
+  const controlMutation = useControlHermesRun(runId);
 
-  const handleControl = async (action: string) => {
-    setIsLoading(true);
+  const handleControl = async (action: RunAction['action']) => {
     try {
-      // TODO: Implement run control actions via backend API
-      console.log(`Run ${action} for ${runId}`);
+      await controlMutation.mutateAsync({ action });
     } catch (error) {
       console.error(`Failed to ${action} run:`, error);
-    } finally {
-      setIsLoading(false);
     }
   };
+
+  const isLoading = controlMutation.isPending;
 
   return (
     <div className="flex items-center gap-2">
@@ -308,3 +307,4 @@ export function RunControls({ runId, status, canResume }: RunControlsProps) {
     </div>
   );
 }
+

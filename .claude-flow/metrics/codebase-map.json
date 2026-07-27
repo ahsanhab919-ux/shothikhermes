@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-07-26T10:44:43.658Z",
+  "projectRoot": "C:\\Users\\USER\\hermes\\shothik-web-mirror-v2",
+  "structure": {
+    "hasPackageJson": true,
+    "hasTsConfig": true,
+    "hasClaudeConfig": true,
+    "hasClaudeFlow": true
+  },
+  "scannedAt": 1785062683659
+}

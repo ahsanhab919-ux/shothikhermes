@@ -1,0 +1,218 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Slider } from "@/components/ui/slider";
+import { Input } from "@/components/ui/input";
+import { Separator } from "@/components/ui/separator";
+import { Progress } from "@/components/ui/progress";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Upload, Settings, Image, FileText, Sparkles, Play, Users, Wifi, Save, RotateCcw, History, Link as LinkIcon } from "lucide-react";
+import { motion } from "framer-motion";
+
+/**
+ * Presenton Slide Section UI (Manus/Genspark-inspired)
+ * - Left: Outline
+ * - Center: Canvas with streaming text + live generation progress
+ * - Right: Content / Style / AI tabs
+ * - Top: Title bar with version, presence, and quick actions
+ */
+export default function PresentonSlideUI() {
+  const [slides] = useState(Array.from({ length: 10 }, (_, i) => ({ id: i + 1, title: `Slide ${i + 1}` })));
+  const [active, setActive] = useState(1);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [streamText, setStreamText] = useState("Exploring the impact of Artificial Intelligence across industries.");
+  const [baseText] = useState("Exploring the impact of Artificial Intelligence across industries, operations, and everyday life — with examples, data and trends.");
+  const [version, setVersion] = useState(3);
+  const [presence] = useState([
+    { name: "AH", color: "bg-emerald-500" },
+    { name: "AA", color: "bg-sky-500" },
+  ]);
+
+  // Simulate streaming text like Genspark (token-by-token)
+  const streamRef = useRef<number | null>(null);
+  const startStreaming = () => {
+    setStreamText("");
+    let i = 0;
+    const tokens = baseText.split(" ");
+    streamRef.current = window.setInterval(() => {
+      i++;
+      setStreamText(tokens.slice(0, i).join(" ") + (i < tokens.length ? " …" : ""));
+      if (i >= tokens.length && streamRef.current) {
+        clearInterval(streamRef.current);
+        streamRef.current = null;
+      }
+    }, 65);
+  };
+
+  // Simulated generation progress (like Manus live rendering)
+  const startGeneration = () => {
+    setIsGenerating(true);
+    setProgress(0);
+    let p = 0;
+    const id = window.setInterval(() => {
+      p += Math.random() * 12 + 5;
+      if (p >= 100) {
+        p = 100;
+        window.clearInterval(id);
+        setTimeout(() => setIsGenerating(false), 400);
+      }
+      setProgress(Math.min(100, Math.floor(p)));
+    }, 350);
+    startStreaming();
+  };
+
+  const resetSlide = () => {
+    setStreamText("Exploring the impact of Artificial Intelligence across industries.");
+  };
+
+  return (
+    <div className="flex h-screen bg-gray-50">
+      {/* Top Title Bar */}
+      <div className="fixed top-0 left-0 right-0 h-14 bg-white border-b flex items-center px-4 gap-3 z-20">
+        <div className="font-semibold">Presenton — Deck: <span className="text-gray-600">AI Revolution</span></div>
+        <Separator orientation="vertical" className="h-6" />
+        <div className="text-sm text-gray-500 flex items-center gap-2"><History size={16}/> v{version} <Button size="sm" variant="outline" onClick={() => setVersion(v => v + 1)}>Save Version</Button></div>
+        <div className="ml-auto flex items-center gap-3">
+          {/* Presence Avatars */}
+          <div className="flex -space-x-2">
+            {presence.map((p, idx) => (
+              <Avatar key={idx} className={`ring-2 ring-white ${p.color}`}> 
+                <AvatarFallback className="text-white text-xs font-semibold">{p.name}</AvatarFallback>
+              </Avatar>
+            ))}
+          </div>
+          <div className="text-xs text-gray-500 flex items-center gap-1"><Users size={16}/> 2 editing</div>
+          <Button variant="outline" size="sm"><LinkIcon size={16}/> Share</Button>
+          <Button variant="default" size="sm" className="bg-[#00C471] hover:bg-[#00a25a]"><Save size={16}/> Save</Button>
+        </div>
+      </div>
+
+      {/* Left Sidebar: Outline */}
+      <div className="w-1/5 border-r bg-white shadow-sm flex flex-col pt-14">
+        <div className="p-4 font-semibold text-gray-700">Outline</div>
+        <div className="flex-1 overflow-y-auto space-y-3 p-3">
+          {slides.map((s) => (
+            <Card key={s.id} onClick={() => setActive(s.id)} className={`cursor-pointer transition ${active===s.id ? "ring-2 ring-[#00C471]" : "hover:bg-green-50"}`}>
+              <CardContent className="p-2 flex items-center gap-2">
+                <div className="w-12 h-8 bg-gray-200 rounded-sm" />
+                <span className="text-sm text-gray-700 truncate">{s.title}</span>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+        <div className="p-4 flex gap-2">
+          <Button className="flex-1 bg-[#00C471] hover:bg-[#00a25a]">+ Add Slide</Button>
+          <Button variant="outline" className="flex-1" onClick={() => setVersion(v=>v+1)}><Save size={16}/> Save</Button>
+        </div>
+      </div>
+
+      {/* Center Canvas */}
+      <div className="flex-1 flex flex-col items-center justify-center p-6 pt-20">
+        {/* Generation Banner */}
+        {isGenerating && (
+          <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-4xl mb-4">
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="text-sm text-gray-700 flex items-center gap-2"><Wifi size={16}/> Generating slides…</div>
+                  <div className="text-xs text-gray-500">{progress}%</div>
+                </div>
+                <Progress value={progress} />
+                <div className="text-xs text-gray-500 mt-2">Rendering slide {Math.ceil((progress/100)*slides.length)} / {slides.length}</div>
+              </CardContent>
+            </Card>
+          </motion.div>
+        )}
+
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="relative w-[960px] h-[540px] bg-white rounded-2xl shadow-lg border flex flex-col items-center justify-center"
+        >
+          <div className="absolute top-4 left-4 text-gray-400 text-sm">Slide {active} / {slides.length}</div>
+          <div className="absolute top-4 right-4 text-xs text-gray-500">Aspect 16:9</div>
+          {/* Simulated presence cursor badge */}
+          <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-black/80 text-white text-xs px-2 py-1 rounded-full shadow">Ahsan is editing title…</div>
+
+          <div className="flex flex-col items-center text-center px-10">
+            <h2 className="text-3xl font-bold mb-3">AI Revolution</h2>
+            <p className="text-gray-600 max-w-2xl leading-relaxed">{streamText}</p>
+          </div>
+        </motion.div>
+
+        {/* Toolbar */}
+        <div className="flex gap-3 mt-6">
+          <Button variant="outline"><FileText size={18}/> Text</Button>
+          <Button variant="outline"><Image size={18}/> Image</Button>
+          <Button variant="outline" onClick={startGeneration}><Sparkles size={18}/> Regenerate</Button>
+          <Button variant="outline" onClick={resetSlide}><RotateCcw size={18}/> Reset</Button>
+          <Button variant="outline"><Play size={18}/> Preview</Button>
+        </div>
+      </div>
+
+      {/* Right Panel */}
+      <div className="w-1/4 border-l bg-white shadow-sm flex flex-col pt-14">
+        <Tabs defaultValue="content" className="w-full">
+          <TabsList className="grid grid-cols-3 sticky top-14 bg-white">
+            <TabsTrigger value="content">Content</TabsTrigger>
+            <TabsTrigger value="style">Style</TabsTrigger>
+            <TabsTrigger value="ai">AI</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="content" className="p-4 space-y-4">
+            <Input placeholder="Slide title" defaultValue="AI Revolution" />
+            <Input placeholder="Subtitle or description" />
+            <Separator />
+            <Button variant="outline" className="w-full"><Upload size={16}/> Upload Image</Button>
+          </TabsContent>
+
+          <TabsContent value="style" className="p-4 space-y-4">
+            <label className="text-sm text-gray-600">Font Size</label>
+            <Slider defaultValue={[18]} max={48} step={1} />
+            <label className="text-sm text-gray-600">Theme Color</label>
+            <div className="flex gap-2">
+              {["#00C471", "#00844E", "#34D399", "#1E293B"].map((c) => (
+                <div key={c} className="w-6 h-6 rounded-full cursor-pointer border" style={{ backgroundColor: c }} />
+              ))}
+            </div>
+            <Separator />
+            <div className="flex items-center justify-between text-sm text-gray-600">
+              <span>Aspect Ratio</span>
+              <div className="flex gap-2">
+                <Button size="sm" variant="outline">16:9</Button>
+                <Button size="sm" variant="outline">4:3</Button>
+              </div>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="ai" className="p-4 space-y-4">
+            <label className="text-sm text-gray-600">Regeneration Mode</label>
+            <select className="w-full border rounded p-2 text-sm">
+              <option>Rewrite Text Only</option>
+              <option>Redesign Layout</option>
+              <option>Full Regeneration</option>
+            </select>
+            <label className="text-sm text-gray-600">Target Audience</label>
+            <select className="w-full border rounded p-2 text-sm">
+              <option>Executives</option>
+              <option>Developers</option>
+              <option>Students</option>
+              <option>General</option>
+            </select>
+            <label className="text-sm text-gray-600">Tone</label>
+            <select className="w-full border rounded p-2 text-sm">
+              <option>Professional</option>
+              <option>Persuasive</option>
+              <option>Casual</option>
+              <option>Educational</option>
+            </select>
+            <Separator />
+            <Button className="w-full bg-[#00C471] hover:bg-[#00a25a]"><Sparkles size={16}/> Regenerate Slide</Button>
+          </TabsContent>
+        </Tabs>
+      </div>
+    </div>
+  );
+}

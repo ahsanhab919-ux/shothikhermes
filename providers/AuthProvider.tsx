@@ -32,6 +32,26 @@ interface AuthContextProps {
 const AuthContext = createContext<AuthContextProps | undefined>(undefined);
 
 const authService = new AuthService();
+const AUTH_PROBE_TIMEOUT_MS = 5000;
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`Timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({
   children,
@@ -48,6 +68,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
         setIsLoading(false);
         return;
       }
+
+      let resolved = false;
 
       // #region debug-point A:hydrate-start
       fetch("http://127.0.0.1:7777/event", {
@@ -68,9 +90,13 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
       // #endregion
 
       try {
-        const sessionResponse = await fetch("/api/auth/session", {
-          credentials: "same-origin",
-        }).catch(() => null);
+        const sessionResponse = await withTimeout(
+          fetch("/api/auth/session", {
+            credentials: "same-origin",
+            cache: "no-store",
+          }).catch(() => null),
+          AUTH_PROBE_TIMEOUT_MS,
+        );
 
         if (sessionResponse?.ok) {
           const sessionPayload = await sessionResponse.json().catch(() => null);
@@ -83,13 +109,17 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
             setUser(sessionUser);
             setIsAuthenticated(true);
             setIsLoading(false);
+            resolved = true;
             return;
           }
         }
 
         const insforge = getInsforgeBrowserClient();
         const resolveInsforgeUser = async () => {
-          const current = await insforge.auth.getCurrentUser();
+          const current = await withTimeout(
+            insforge.auth.getCurrentUser(),
+            AUTH_PROBE_TIMEOUT_MS,
+          );
           let resolvedUser = !current.error
             ? normalizeInsforgeUser(current.data?.user ?? null)
             : null;
@@ -102,9 +132,13 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
             };
           }
 
-          const refreshResponse = await fetch("/api/auth/refresh", {
-            method: "POST",
-          }).catch(() => null);
+          const refreshResponse = await withTimeout(
+            fetch("/api/auth/refresh", {
+              method: "POST",
+              cache: "no-store",
+            }).catch(() => null),
+            AUTH_PROBE_TIMEOUT_MS,
+          );
 
           if (!refreshResponse?.ok) {
             return {
@@ -114,7 +148,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
             };
           }
 
-          const refreshed = await insforge.auth.getCurrentUser();
+          const refreshed = await withTimeout(
+            insforge.auth.getCurrentUser(),
+            AUTH_PROBE_TIMEOUT_MS,
+          );
           resolvedUser = !refreshed.error
             ? normalizeInsforgeUser(refreshed.data?.user ?? null)
             : null;
@@ -153,77 +190,86 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
           setUser(insforgeUser);
           setIsAuthenticated(true);
           setIsLoading(false);
+          resolved = true;
           return;
         }
       } catch (error) {
         // Fall back to the legacy bridge while the rest of auth is still migrating.
-      }
-
-      const token = localStorage.getItem("jwt_token");
-      if (!token) {
-        if (!cancelled) {
-          setUser(null);
-          setIsAuthenticated(false);
-          setIsLoading(false);
-        }
-
-        // #region debug-point A:no-session-found
-        fetch("http://127.0.0.1:7777/event", {
-          method: "POST",
-          body: JSON.stringify({
-            sessionId: "chat-auth-session",
-            runId: "pre-fix",
-            hypothesisId: "A",
-            location: "providers/AuthProvider.tsx:hydrateAuth:no-session",
-            msg: "[DEBUG] Auth hydration found no usable browser session",
-            data: {
-              path: window.location.pathname,
-            },
-            ts: Date.now(),
-          }),
-        }).catch(() => undefined);
-        // #endregion
-        return;
-      }
-
-      try {
-        const userData = await authService.validateToken(token);
-        const legacyUser = normalizeLegacyUser(userData);
-
-        if (!cancelled && legacyUser) {
-          setUser(legacyUser);
-          setIsAuthenticated(true);
+      } finally {
+        if (resolved) {
           return;
         }
 
-        throw new Error("Invalid token");
-      } catch (error) {
-        localStorage.removeItem("jwt_token");
-        if (!cancelled) {
-          setUser(null);
-          setIsAuthenticated(false);
-        }
-      } finally {
-        if (!cancelled) {
-          setIsLoading(false);
+        const token = localStorage.getItem("jwt_token");
+        if (!token) {
+          if (!cancelled) {
+            setUser(null);
+            setIsAuthenticated(false);
+            setIsLoading(false);
+          }
+
+          // #region debug-point A:no-session-found
+          fetch("http://127.0.0.1:7777/event", {
+            method: "POST",
+            body: JSON.stringify({
+              sessionId: "chat-auth-session",
+              runId: "pre-fix",
+              hypothesisId: "A",
+              location: "providers/AuthProvider.tsx:hydrateAuth:no-session",
+              msg: "[DEBUG] Auth hydration found no usable browser session",
+              data: {
+                path: window.location.pathname,
+              },
+              ts: Date.now(),
+            }),
+          }).catch(() => undefined);
+          // #endregion
+          return;
         }
 
-        // #region debug-point A:legacy-fallback-complete
-        fetch("http://127.0.0.1:7777/event", {
-          method: "POST",
-          body: JSON.stringify({
-            sessionId: "chat-auth-session",
-            runId: "pre-fix",
-            hypothesisId: "A",
-            location: "providers/AuthProvider.tsx:hydrateAuth:legacy-complete",
-            msg: "[DEBUG] Auth hydration completed legacy fallback path",
-            data: {
-              path: window.location.pathname,
-            },
-            ts: Date.now(),
-          }),
-        }).catch(() => undefined);
-        // #endregion
+        try {
+          const userData = await withTimeout(
+            authService.validateToken(token),
+            AUTH_PROBE_TIMEOUT_MS,
+          );
+          const legacyUser = normalizeLegacyUser(userData);
+
+          if (!cancelled && legacyUser) {
+            setUser(legacyUser);
+            setIsAuthenticated(true);
+            setIsLoading(false);
+            return;
+          }
+
+          throw new Error("Invalid token");
+        } catch (error) {
+          localStorage.removeItem("jwt_token");
+          if (!cancelled) {
+            setUser(null);
+            setIsAuthenticated(false);
+          }
+        } finally {
+          if (!cancelled) {
+            setIsLoading(false);
+          }
+
+          // #region debug-point A:legacy-fallback-complete
+          fetch("http://127.0.0.1:7777/event", {
+            method: "POST",
+            body: JSON.stringify({
+              sessionId: "chat-auth-session",
+              runId: "pre-fix",
+              hypothesisId: "A",
+              location: "providers/AuthProvider.tsx:hydrateAuth:legacy-complete",
+              msg: "[DEBUG] Auth hydration completed legacy fallback path",
+              data: {
+                path: window.location.pathname,
+              },
+              ts: Date.now(),
+            }),
+          }).catch(() => undefined);
+          // #endregion
+        }
       }
     }
 

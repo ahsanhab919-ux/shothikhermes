@@ -1,0 +1,877 @@
+================================================================================
+DOMAIN 1: MODULAR ENGINE COMPONENTS — PRESENTON FASTAPI BACKEND
+================================================================================
+Analysis covering dependencies, execution flow, and responsibilities of each
+component. Implementation-grade. Structured as plain text (not markdown).
+
+Repository root: https://github.com/presenton/presenton.git
+Backend root:    servers/fastapi/
+Clone analyzed:  /tmp/presenton (shallow clone, 2026-07-25)
+
+================================================================================
+A. APPLICATION BOOTSTRAP AND MIDDLEWARE CHAIN
+================================================================================
+
+--------------------------------------------------------------------------------
+A1. server.py
+--------------------------------------------------------------------------------
+Path: servers/fastapi/server.py
+Responsibilities:
+  - Entry-point script for launching the FastAPI application via uvicorn.
+  - Parses CLI arguments: --port (required), --reload, --log-level.
+  - Imports the FastAPI `app` object from api.main and runs uvicorn on
+    127.0.0.1:<port>.
+Key Dependencies:
+  - uvicorn (ASGI server)
+  - api.main (imports the app object)
+Execution Flow:
+  1. argparse parses --port, --reload, --log-level.
+  2. uvicorn.run("api.main:app", host="127.0.0.1", port=..., ...) is called.
+  3. Uvicorn imports api.main, which triggers app construction at module load
+     time (see A3 below).
+Role in System:
+  - Thin launcher; no business logic. In Docker/Electron this is replaced by
+    a process manager or PyInstaller bundle (see server.spec).
+
+--------------------------------------------------------------------------------
+A2. api/lifespan.py — app_lifespan
+--------------------------------------------------------------------------------
+Path: servers/fastapi/api/lifespan.py
+Responsibilities:
+  - Defines the FastAPI lifespan context manager (app_lifespan) that runs
+    startup and shutdown logic.
+  - Startup sequence (in order):
+    a. _configure_application_logging() — sets root logger level from LOG_LEVEL
+       env, inherits uvicorn handlers.
+    b. Creates APP_DATA_DIRECTORY if missing.
+    c. migrate_database_on_startup() — runs Alembic migrations if
+       MIGRATE_DATABASE_ON_STARTUP=true.
+    d. create_db_and_tables() — creates missing SQLModel tables if Alembic is
+       not used.
+    e. import_default_templates_on_startup() — seeds bundled templates into DB.
+    f. _bootstrap_auth_from_env() — sets up single-user login from
+       AUTH_USERNAME/AUTH_PASSWORD env vars; supports RESET_AUTH and
+       AUTH_OVERRIDE_FROM_ENV.
+    g. update_env_with_user_config() — loads user-config overrides into env
+       (unless CAN_CHANGE_KEYS=false).
+    h. check_llm_and_image_provider_api_or_model_availability() — validates
+       that the configured LLM and image providers are reachable.
+  - Shutdown: dispose_engines() to release DB connection pools.
+Key Dependencies:
+  - migrations.migrate_database_on_startup
+  - services.database (create_db_and_tables, dispose_engines)
+  - templates.default_templates (import_default_templates_on_startup)
+  - utils.get_env, utils.model_availability, utils.user_config,
+    utils.simple_auth
+Execution Flow:
+  FastAPI calls app_lifespan(app) at startup. The context manager yields after
+  completing all init steps, then runs dispose_engines() on shutdown.
+Role in System:
+  - Orchestrator of all startup side-effects. Guarantees DB, auth, templates,
+    env, and provider availability before the app accepts requests.
+
+--------------------------------------------------------------------------------
+A3. api/main.py — app
+--------------------------------------------------------------------------------
+Path: servers/fastapi/api/main.py
+Responsibilities:
+  - Constructs the FastAPI application object (`app`).
+  - Optionally initializes Sentry (if SENTRY_DSN is set).
+  - Initializes sandbox-safe mimetypes (init_sandbox_safe_mimetypes).
+  - Registers all v1 API routers:
+      API_V1_PPT_ROUTER, API_V1_WEBHOOK_ROUTER, API_V1_MOCK_ROUTER,
+      API_V1_AUTH_ROUTER, API_V1_ASYNC_TASKS_ROUTER
+  - Mounts static file directories:
+      /app_data -> APP_DATA_DIRECTORY (user-generated assets)
+      /static  -> static/ (bundled icons, images, placeholders)
+  - Configures CORS (origins from NEXT_PUBLIC_URL or wildcard).
+  - Adds two custom middlewares (in order):
+      1. UserConfigEnvUpdateMiddleware (added first, runs outer)
+      2. SessionAuthMiddleware (added second, runs inner)
+  - Adds a function-level middleware for static icon 404 fallback
+    (serves placeholder.svg when /static/icons/* returns 404).
+Key Dependencies:
+  - fastapi.FastAPI, fastapi.middleware.cors.CORSMiddleware,
+    fastapi.staticfiles.StaticFiles
+  - api.lifespan.app_lifespan
+  - api.middlewares (SessionAuthMiddleware, UserConfigEnvUpdateMiddleware)
+  - All v1 routers (ppt, webhook, mock, auth, async_tasks)
+  - utils.get_env, utils.mime_types, utils.path_helpers
+Execution Flow:
+  Module load: init_sandbox_safe_mimetypes() -> _maybe_init_sentry() ->
+  app = FastAPI(lifespan=app_lifespan) -> include_router() x5 ->
+  mount() x2 -> add_middleware() x2 -> @app.middleware() for icon fallback.
+  At request time: CORS -> UserConfigEnvUpdateMiddleware ->
+  SessionAuthMiddleware -> icon_fallback_middleware -> route handler.
+Role in System:
+  - Application factory. Single source of truth for router registration,
+    middleware chain, and static asset serving.
+
+--------------------------------------------------------------------------------
+A4. api/middlewares.py
+--------------------------------------------------------------------------------
+Path: servers/fastapi/api/middlewares.py
+Responsibilities:
+  - UserConfigEnvUpdateMiddleware: on every request, calls
+    update_env_with_user_config() to refresh env vars from the persisted user
+    config file (unless CAN_CHANGE_KEYS=false). Ensures runtime config changes
+    take effect without restart.
+  - SessionAuthMiddleware: enforces single-user session/basic-auth.
+    - Exempt paths: /api/v1/auth/*, OPTIONS requests, public app_data paths
+      (/app_data/images/, /app_data/fonts/, /app_data/pptx-to-html/).
+    - Protected paths: all /api/* paths, /docs, /openapi.json, /redoc, and
+      non-public /app_data/ paths.
+    - Auth flow:
+      1. If DISABLE_AUTH=true, pass through.
+      2. If auth not configured, return 428 (setup_required).
+      3. Check session token from request. If valid, set auth_username and
+         pass through.
+      4. Fall back to HTTP Basic Auth. If valid, set auth_username and pass.
+      5. Otherwise return 401 Unauthorized.
+Key Dependencies:
+  - starlette.middleware.base.BaseHTTPMiddleware
+  - utils.get_env (get_can_change_keys_env, is_disable_auth_enabled)
+  - utils.simple_auth (get_auth_status, verify_credentials, etc.)
+  - utils.user_config (update_env_with_user_config)
+Execution Flow:
+  Request -> UserConfigEnvUpdateMiddleware.dispatch (refresh env) ->
+  SessionAuthMiddleware.dispatch (validate session/basic auth) ->
+  route handler.
+Role in System:
+  - Security gate. Every API request passes through both middlewares.
+  - Config freshness gate. Ensures user config is loaded before each request.
+
+================================================================================
+B. SERVICE LAYER COMPONENTS AND THEIR RESPONSIBILITIES
+================================================================================
+
+--------------------------------------------------------------------------------
+B1. services/database.py
+--------------------------------------------------------------------------------
+Path: servers/fastapi/services/database.py
+Responsibilities:
+  - Creates the async SQLAlchemy engine (sql_engine) from the database URL
+    (SQLite or PostgreSQL/MySQL via env config).
+  - Creates async_session_maker (expire_on_commit=False).
+  - Provides get_async_session() — FastAPI dependency that yields an
+    AsyncSession per request.
+  - create_db_and_tables() — creates all SQLModel tables if Alembic migrations
+    are not enabled (uses SQLModel.metadata.create_all with an explicit table
+    list of 14 tables).
+  - dispose_engines() — disposes the engine pool on shutdown.
+Key Dependencies:
+  - sqlalchemy.ext.asyncio (AsyncEngine, create_async_engine,
+    async_sessionmaker, AsyncSession)
+  - sqlmodel.SQLModel
+  - All 14 models.sql.* models
+  - utils.get_env, utils.db_utils
+Execution Flow:
+  Module load: engine + session_maker created. Per-request: get_async_session()
+  is injected via Depends() into endpoint signatures. On startup:
+  create_db_and_tables() is called from lifespan. On shutdown: dispose_engines().
+Role in System:
+  - Central database infrastructure. Every endpoint that touches SQL depends
+    on get_async_session.
+
+--------------------------------------------------------------------------------
+B2. services/documents_loader.py (DocumentsLoader)
+--------------------------------------------------------------------------------
+Path: servers/fastapi/services/documents_loader.py
+Responsibilities:
+  - Multi-format document ingestion orchestrator. Given a list of file paths,
+    loads and extracts text from each file.
+  - Dispatches by file extension:
+    - PDF: load_pdf() — detects scanned PDFs (via pdfplumber text sampling),
+      uses LiteParse for OCR/text extraction; optionally renders page images.
+    - Text files: load_text() — direct file read.
+    - Office files (.docx/.pptx/.xlsx/.odt): load_office_document() —
+      delegates to office_document_service.extract_office_document_text.
+    - Image files: load_image() — converts to PNG via
+      DocumentConversionService, then parses with LiteParse (OCR).
+    - Other: _parse_with_liteparse() — fallback to LiteParse.
+  - clean_extracted_document_text() — strips LiteParse JSON wrappers.
+Key Dependencies:
+  - pdfplumber, services.document_conversion_service, services.liteparse_service,
+    services.office_document_service, services.temp_file_service, utils.ocr_language
+Execution Flow:
+  1. Constructor resolves file paths via TEMP_FILE_SERVICE and determines OCR
+     language from presentation_language.
+  2. load_documents(temp_dir) iterates files, dispatches by extension.
+  3. Each file's extracted text is cleaned and appended to self._documents.
+  4. For PDFs with load_images=True, page images are rendered to temp_dir.
+Role in System:
+  - Core of the document ingestion pipeline. Called by:
+    - api/v1/ppt/endpoints/files.py (decompose_files)
+    - api/v1/ppt/endpoints/outlines.py (stream_outlines)
+    - api/v1/ppt/endpoints/presentation.py (generate_presentation_stream)
+    - services/chat/service.py (readSourceDocuments tool)
+
+--------------------------------------------------------------------------------
+B3. services/document_conversion_service.py (DocumentConversionService)
+--------------------------------------------------------------------------------
+Path: servers/fastapi/services/document_conversion_service.py
+Responsibilities:
+  - Converts image files to PNG format (normalize for LiteParse OCR).
+  - Handles EXIF orientation, transparency flattening, mode conversion.
+Key Dependencies: PIL (Pillow)
+Role in System: Preprocessing step for image-based document ingestion.
+
+--------------------------------------------------------------------------------
+B4. services/liteparse_service.py (LiteParseService)
+--------------------------------------------------------------------------------
+Path: servers/fastapi/services/liteparse_service.py
+Responsibilities:
+  - Wraps the @llamaindex/liteparse Node.js package for document parsing with OCR.
+  - Locates the liteparse_runner.mjs script across deployment layouts.
+  - parse_to_markdown() / parse() — runs Node.js subprocess with CLI args
+    (--file, --ocr-enabled, --ocr-language, --dpi, --num-workers).
+  - Timeout: 600 seconds (10 minutes).
+Key Dependencies: subprocess, Node.js + @llamaindex/liteparse (external)
+Role in System: Primary document parsing engine for PDFs, images, complex docs.
+
+--------------------------------------------------------------------------------
+B5. services/office_document_service.py
+--------------------------------------------------------------------------------
+Path: servers/fastapi/services/office_document_service.py
+Responsibilities:
+  - Pure-Python text extraction from OOXML/ODF formats (.docx, .pptx, .xlsx, .odt, etc.).
+  - Uses zipfile + xml.etree.ElementTree — no external office suite required.
+  - Format-specific extractors: _extract_docx, _extract_pptx, _extract_xlsx, _extract_odf.
+  - Rejects legacy formats (.doc, .ppt, .xls, .rtf) with a clear error.
+Key Dependencies: zipfile, xml.etree.ElementTree (stdlib)
+Role in System: Fast, dependency-free text extraction for office documents.
+
+--------------------------------------------------------------------------------
+B6. services/image_generation_service.py (ImageGenerationService)
+--------------------------------------------------------------------------------
+Path: servers/fastapi/services/image_generation_service.py
+Responsibilities:
+  - Multi-provider image generation facade. 9 providers:
+    - Stock: Pexels, Pixabay
+    - AI: DALL-E 3, GPT-Image-1.5, Gemini Flash, NanoBanana Pro, ComfyUI,
+          Open WebUI, OpenAI-compatible
+  - generate_image(prompt: ImagePrompt) -> str | ImageAsset
+  - Serializes requests with per-event-loop lock (unless parallel mode).
+  - ComfyUI: injects prompt into workflow JSON, randomizes seeds, polls.
+Key Dependencies: aiohttp, openai.AsyncOpenAI, google.genai, utils.get_env,
+  utils.image_provider, utils.asset_directory_utils
+Role in System: Called by images endpoint, process_slides, chat tools.
+
+--------------------------------------------------------------------------------
+B7. services/icon_finder_service.py (IconFinderService / ICON_FINDER_SERVICE)
+--------------------------------------------------------------------------------
+Path: servers/fastapi/services/icon_finder_service.py
+Responsibilities:
+  - Semantic icon search using fastembed vector embeddings (AllMiniLML6V2).
+  - Lazy initialization: loads or creates vectorstore on first search.
+  - search_icons(query, k, weight) -> list of icon URLs with weight normalization.
+  - Supports 6 icon weights: bold, duotone, fill, light, regular, thin.
+Key Dependencies: fastembed_vectorstore, utils.asset_directory_utils,
+  utils.icon_weights, utils.path_helpers
+Role in System: Singleton. Called by icons endpoint and process_slides.
+
+--------------------------------------------------------------------------------
+B8. services/temp_file_service.py (TempFileService / TEMP_FILE_SERVICE)
+--------------------------------------------------------------------------------
+Path: servers/fastapi/services/temp_file_service.py
+Responsibilities:
+  - Manages a sandboxed temporary file directory.
+  - Security: all paths validated to stay within base temp dir (realpath containment).
+  - Operations: create_temp_dir, create_temp_file_path, read_temp_file,
+    update_temp_file_from_upload, cleanup_temp_file, cleanup_temp_dir.
+  - Filename sanitization: strips path components, rejects . and ..
+Key Dependencies: utils.get_env (get_temp_directory_env)
+Role in System: Foundation service for files, documents, presentation, chat.
+
+--------------------------------------------------------------------------------
+B9. services/concurrent_service.py (ConcurrentService / CONCURRENT_SERVICE)
+--------------------------------------------------------------------------------
+Path: servers/fastapi/services/concurrent_service.py
+Responsibilities:
+  - Manages background asyncio tasks (fire-and-forget) with lifecycle tracking.
+  - run_task(delay, callable, *args) -> creates asyncio.Task, stores in set,
+    adds done callback for cleanup and error logging.
+Role in System: Used for webhook dispatch and async presentation generation.
+
+--------------------------------------------------------------------------------
+B10. services/webhook_service.py (WebhookService)
+--------------------------------------------------------------------------------
+Path: servers/fastapi/services/webhook_service.py
+Responsibilities:
+  - Sends HTTP POST notifications to registered webhook subscriptions.
+  - send_webhook(event, data) -> queries WebhookSubscription table ->
+    POST to each URL with optional Bearer auth -> concurrent gather.
+Key Dependencies: aiohttp, sqlmodel.select, models.sql.webhook_subscription,
+  services.database, enums.webhook_event
+Role in System: Event notification layer. Called after generation, slide edits.
+
+--------------------------------------------------------------------------------
+B11. services/export_task_service.py (ExportTaskService / EXPORT_TASK_SERVICE)
+--------------------------------------------------------------------------------
+Path: servers/fastapi/services/export_task_service.py
+Responsibilities:
+  - Manages the Node.js-based presentation export runtime (Puppeteer).
+  - Operations:
+    - export_from_url(url, format) -> PDF or PPTX from rendered URL.
+    - convert_pptx_to_html(pptx_path) -> HTML representation of slides.
+    - html_to_image(html) -> screenshot of HTML.
+    - json_to_image(layout_json) -> rendered slide image from JSON.
+    - extract_schema(pptx_path) -> extract layout schemas from PPTX.
+  - JSON file-based IPC: writes task JSON to temp file -> spawns Node.js
+    subprocess -> reads response JSON -> cleans up.
+  - Image asset localization: embeds local images as base64 data URIs.
+  - Timeout: 300 seconds.
+Key Dependencies: asyncio.create_subprocess_exec, Node.js + Puppeteer,
+  services.liteparse_service (shared utils), utils.asset_directory_utils
+Role in System: Export and conversion engine. Called by presentation export,
+  template creation, file decomposition.
+
+--------------------------------------------------------------------------------
+B12. services/score_based_chunker.py (ScoreBasedChunker)
+--------------------------------------------------------------------------------
+Path: servers/fastapi/services/score_based_chunker.py
+Responsibilities:
+  - Splits markdown text into semantic chunks based on heading scores.
+  - get_n_chunks(text, n) — async wrapper returning exactly n chunks.
+Key Dependencies: models.document_chunk (DocumentChunk)
+Role in System: Semantic document segmentation for chat/summarization.
+
+--------------------------------------------------------------------------------
+B13. services/mem0_presentation_memory_service.py
+--------------------------------------------------------------------------------
+Path: servers/fastapi/services/mem0_presentation_memory_service.py
+Responsibilities:
+  - Presentation-level memory using mem0 OSS.
+  - Stores: generation context, outlines, slide edits.
+  - retrieve_context(query) — semantic search for slide editing.
+  - Scoped by presentation_id. Graceful degradation if disabled.
+  - Configurable: MEM0_ENABLED, MEM0_TOP_K, MEM0_MAX_CONTEXT_CHARS.
+Key Dependencies: services.mem0_oss_memory (get_shared_mem0_client), asyncio.to_thread
+Role in System: Long-term memory. Called by outlines, presentation, slide, chat.
+
+--------------------------------------------------------------------------------
+B14. services/mem0_oss_memory.py
+--------------------------------------------------------------------------------
+Path: servers/fastapi/services/mem0_oss_memory.py
+Responsibilities:
+  - Singleton mem0 OSS Memory client factory.
+  - get_shared_mem0_client() — thread-safe lazy init of mem0 Memory backed by
+    Qdrant (on-disk) + SQLite history DB.
+  - Config: MEM0_DIR, MEM0_QDRANT_PATH, MEM0_HISTORY_DB_PATH, embedder
+    (fastembed/BAAI/bge-small-en-v1.5), LLM (default Ollama llama3.1).
+  - spaCy model availability check (required for entity extraction).
+Key Dependencies: mem0 (Memory class), spacy, threading.Lock
+Role in System: Foundation for all mem0-based memory services.
+
+--------------------------------------------------------------------------------
+B15. services/chat/ (Chat Subsystem — 9 files)
+--------------------------------------------------------------------------------
+
+B15a. services/chat/service.py (PresentationChatService)
+  Responsibilities:
+    - Core chat orchestrator. Multi-round LLM conversation with tool-calling.
+    - generate_reply() -> synchronous ChatTurnResult.
+    - stream_reply() -> async generator yielding chunk/status/trace/complete events.
+    - _prepare_turn_context() -> loads presentation, parses attachments, loads
+      conversation history, retrieves memory context, composes system prompt.
+    - _run_llm_with_tools() — up to MAX_TOOL_ROUNDS (40) rounds of generate->
+      execute tools-> append-> continue.
+    - Persists turns via ChatConversationStore.append_turn().
+  Key Dependencies: llmai, ChatConversationStore, PresentationContextStore,
+    ChatTools, prompts, DocumentsLoader, mem0, llm_config/provider/utils
+  Role in System: The AI assistant for presentation editing via natural language.
+
+B15b. services/chat/tools.py (ChatTools — 1682 lines)
+  Responsibilities:
+    - Defines 23 chat tools for presentation manipulation:
+      Outline: addOutline, updateOutline, deleteOutline
+      Slides: addNewSlide, addNewSlideLayout, deleteSlide, saveSlide,
+              updateSlide, searchSlide, getSlideAtIndex
+      Elements: addElement, updateElement, deleteElement
+      Components: addComponent, createComponent, updateComponent, deleteComponent
+      Discovery: getTemplateSummary, getAvailableLayouts, getAvailableBlocks,
+                 getContentSchemaFromLayoutId, readSourceDocuments
+      Assets: generateAssets
+      Theme: getPresentationTheme, setPresentationTheme
+    - execute_tool_call() -> parses args, repairs args, executes handler.
+  Role in System: Tool-calling layer for chat LLM to manipulate presentation state.
+
+B15c. services/chat/conversation_store.py (ChatConversationStore)
+  Responsibilities:
+    - Manages chat conversation lifecycle.
+    - ensure_conversation_id(), load_history() (SQL + mem0 fallback),
+      append_turn() (SQL + mem0 mirror), retrieve_semantic_context().
+  Key Dependencies: services.chat.sql_chat_history, services.chat.chat_memory_store
+
+B15d. services/chat/sql_chat_history.py
+  Responsibilities:
+    - SQL persistence for chat messages. load_messages, append_turn,
+      replace_messages, delete_conversation, list_conversations.
+    - Supports both presentation_id and template_v2_id as resource filters.
+
+B15e. services/chat/chat_memory_store.py (ChatMemoryStore / CHAT_MEMORY_STORE)
+  Responsibilities:
+    - Semantic memory for chat conversations using mem0.
+    - store_chat_turn(), retrieve_context(), load_history() (legacy fallback).
+    - Scoped by: "{namespace}:{presentation_id}:conversation:{conversation_id}".
+
+B15f. services/chat/memory_layer.py (PresentationChatMemoryLayer — 4541 lines)
+  Responsibilities:
+    - Memory abstraction for chat tools — hides SQL + mem0 behind get/search.
+    - get("presentation_outline"), search(query), get_slide_at_index(index).
+    - Slide manipulation: save_slide, update_slide, add_new_slide, etc.
+    - Element/component CRUD: add_element, update_element, delete_element, etc.
+    - Theme management: get_presentation_theme_catalog, set_presentation_theme.
+    - Asset generation: generate_assets (images + icons).
+    - Schema validation via jsonschema Draft202012Validator.
+    - 5 builtin themes: Edge Yellow, Light Rose, Mint Blue, Professional Blue,
+      Professional Dark.
+  Key Dependencies: models.sql.*, icon_finder_service, image_generation_service,
+    documents_loader, temp_file_service, mem0, process_slides, jsonschema
+  Role in System: Data-access layer for all chat tool operations.
+
+B15g. services/chat/prompts.py
+  Responsibilities:
+    - CHAT_AI_ASSISTANT_SYSTEM_PROMPT — comprehensive system prompt with rules
+      for tool usage, slide numbering, edit rules, chart/table/asset rules,
+      theme rules, outline protocol.
+    - build_system_prompt() assembles system prompt with memory context blocks.
+
+B15h. services/chat/schemas.py
+  Responsibilities: Pydantic models for all 23 chat tool inputs.
+
+B15i. services/chat/slide_ui_helpers.py (2205 lines)
+  Responsibilities:
+    - UI element normalization and validation for chat/editor.
+    - Chart normalization: _normalize_chart_element.
+    - Element validation: _validate_current_element_model.
+    - Image normalization: _normalize_image_element.
+    - Markdown-to-runs parsing for text elements.
+    - Supports: text, text-list, table, image, chart, vector, infographic,
+      container, flex, grid, group, svg element types.
+
+================================================================================
+C. LLM ORCHESTRATION PIPELINE (HOW PROMPTS BECOME SLIDES)
+================================================================================
+
+The presentation generation pipeline has these phases:
+  1. Presentation creation (metadata + source content)
+  2. Outline generation (LLM generates slide-by-slide content plan)
+  3. Structure generation (LLM selects layout for each slide)
+  4. Slide content generation (LLM fills each layout schema)
+  5. Asset generation (images + icons fetched/generated)
+  6. Persistence (slides saved to SQL)
+
+--------------------------------------------------------------------------------
+C1. utils/llm_config.py (get_llm_config)
+--------------------------------------------------------------------------------
+Path: servers/fastapi/utils/llm_config.py
+Responsibilities:
+  - Constructs a llmai ClientConfig object for the configured LLM provider.
+  - Supports 16 providers: OpenAI, DeepSeek, Google, Vertex, Azure, Bedrock,
+    OpenRouter, Fireworks, Together, Cerebras, Anthropic, LiteLLM, LMStudio,
+    Ollama, Custom, Codex (ChatGPT OAuth).
+  - Each provider has its own config class and env-based initialization.
+  - Codex provider: handles OAuth token refresh when tokens expire.
+  - get_extra_body() — provider-specific extra parameters (e.g., disabling
+    thinking for DeepSeek when tools are used).
+  - enable_web_grounding() / disable_thinking() — env-based feature toggles.
+Key Dependencies: llmai (all client config classes), enums.llm_provider,
+  utils.get_env, utils.llm_provider, utils.oauth.openai_codex
+Role in System: Called by every LLM interaction.
+
+--------------------------------------------------------------------------------
+C2. utils/llm_provider.py (get_model, get_llm_provider)
+--------------------------------------------------------------------------------
+Path: servers/fastapi/utils/llm_provider.py
+Responsibilities:
+  - get_llm_provider() — reads LLM_PROVIDER env, returns LLMProvider enum.
+  - get_model() — returns model name for configured provider (env override or
+    default from constants/llm.py).
+  - Provider detection predicates: is_openai_selected(), is_anthropic_selected(), etc.
+  - get_google_llm_client() / get_llm_client() — direct client constructors.
+Key Dependencies: constants.llm (DEFAULT_*_MODEL), enums.llm_provider, utils.get_env
+Role in System: Called alongside get_llm_config() by every LLM interaction.
+
+--------------------------------------------------------------------------------
+C3. constants/llm.py
+--------------------------------------------------------------------------------
+Path: servers/fastapi/constants/llm.py
+  - Default model names per provider: OpenAI=gpt-4.1, DeepSeek=deepseek-chat,
+    Google=gemini-2.5-flash, Anthropic=claude-sonnet-4-20250514, etc.
+  - SUPPORTED_CODEX_MODELS — allowed Codex/ChatGPT models.
+  - DEFAULT_CODEX_MODEL = "gpt-5.6-luna".
+
+--------------------------------------------------------------------------------
+C4. utils/llm_utils.py
+--------------------------------------------------------------------------------
+Path: servers/fastapi/utils/llm_utils.py
+Responsibilities:
+  - get_generate_kwargs(model, messages, tools, response_format, stream) ->
+    builds kwargs dict for client.generate(), including extra_body.
+  - generate_structured_with_schema_retries() — structured output generation:
+    a. Inner loop: up to 3 parse retries (dirtyjson fallback).
+    b. Outer loop: up to N schema validation feedback loops — if output doesn't
+       match JSON schema, appends validation error message and retries.
+  - stream_generate_events() — async generator bridging sync llmai
+    client.generate(stream=True) via thread + queue pattern. Supports client
+    disconnect detection.
+  - extract_text() / extract_structured_content() / message_content_to_text().
+  - structured_validation_feedback_user_message() — builds feedback for retries.
+Key Dependencies: llmai.shared, dirtyjson, utils.llm_config, utils.schema_utils
+Role in System: Foundation for all LLM calls.
+
+--------------------------------------------------------------------------------
+C5. utils/llm_client_error_handler.py
+--------------------------------------------------------------------------------
+Path: servers/fastapi/utils/llm_client_error_handler.py
+Responsibilities:
+  - handle_llm_client_exceptions(e) — normalizes LLM API errors into
+    HTTPException with appropriate status codes and safe messages.
+  - Handles: llmai BaseError, OpenAI APIError, Google APIError, generic.
+  - Codex-specific: converts 401/403 to ChatGPT auth-required responses.
+Role in System: Error normalization layer wrapping every LLM call's except block.
+
+--------------------------------------------------------------------------------
+C6. utils/llm_calls/generate_presentation_outlines.py
+--------------------------------------------------------------------------------
+Path: servers/fastapi/utils/llm_calls/generate_presentation_outlines.py
+Responsibilities:
+  - Phase 2: outline generation.
+  - get_system_prompt() — detailed system prompt with rules for content
+    generation, language, tone, verbosity, title slide, TOC, markdown format,
+    web search usage.
+  - generate_ppt_outline() — async generator:
+    a. Optionally generates web search query (if external search enabled).
+    b. Fetches web search context.
+    c. Streams LLM output with JSON schema response format
+       (PresentationOutlineModel schema).
+    d. Yields OutlineGenerationStatus events and content chunks.
+  - Web search routing: native (model-native) vs external (SearXNG, Tavily,
+    Exa, Brave, Serper).
+Key Dependencies: llmai, utils.llm_*, utils.web_search, utils.get_dynamic_models
+Role in System: Called by outlines endpoint and presentation generation.
+
+--------------------------------------------------------------------------------
+C7. utils/llm_calls/generate_presentation_structure.py
+--------------------------------------------------------------------------------
+Path: servers/fastapi/utils/llm_calls/generate_presentation_structure.py
+Responsibilities:
+  - Phase 3: layout selection.
+  - Given outline (slide contents) and available layouts, asks LLM to select
+    a layout index for each slide.
+  - Two system prompts: creative designer prompt (varied selection) and
+    rule-based prompt (stricter for slides_markdown input).
+  - User intent rules: extracts visual constraints from instructions.
+  - Returns PresentationStructureModel (list of layout indices).
+Key Dependencies: llmai, utils.llm_*, models.presentation_*, utils.get_dynamic_models
+Role in System: Called by presentation.py (prepare_presentation).
+
+--------------------------------------------------------------------------------
+C8. utils/llm_calls/generate_slide_content.py
+--------------------------------------------------------------------------------
+Path: servers/fastapi/utils/llm_calls/generate_slide_content.py
+Responsibilities:
+  - Phase 4: structured slide content generation.
+  - Given slide layout (with JSON schema) and outline content, generates
+    structured content JSON matching the layout schema.
+  - _prepare_response_schema() — removes asset-only fields, adds
+    __speaker_note__, ensures array schemas have items.
+  - System prompt: language guidelines, markdown emphasis rules, tone/verbosity,
+    output field schema, chart/table content rules.
+  - Returns dict matching layout's JSON schema.
+Key Dependencies: llmai, utils.llm_*, utils.schema_utils
+Role in System: Called by presentation.py for each slide.
+
+--------------------------------------------------------------------------------
+C9. utils/llm_calls/edit_slide.py
+--------------------------------------------------------------------------------
+Path: servers/fastapi/utils/llm_calls/edit_slide.py
+Responsibilities:
+  - Slide content editing via LLM.
+  - Given user prompt, current slide data, and layout schema, generates
+    edited slide content. Includes memory context for context-aware edits.
+Role in System: Called by slide.py (edit_slide endpoint).
+
+--------------------------------------------------------------------------------
+C10. utils/llm_calls/edit_slide_html.py
+--------------------------------------------------------------------------------
+Path: servers/fastapi/utils/llm_calls/edit_slide_html.py
+Responsibilities:
+  - HTML-based slide editing via LLM. Returns modified HTML.
+  - extract_html_from_response() — strips non-HTML text from LLM output.
+Role in System: Called by slide.py (edit_slide_html endpoint).
+
+--------------------------------------------------------------------------------
+C11. utils/llm_calls/select_slide_type_on_edit.py
+--------------------------------------------------------------------------------
+Path: servers/fastapi/utils/llm_calls/select_slide_type_on_edit.py
+Responsibilities:
+  - Determines if slide layout should change based on user edit prompt.
+  - Returns a SlideLayoutModel (may be same as current).
+Role in System: Called by slide.py (edit_slide endpoint).
+
+--------------------------------------------------------------------------------
+C12. utils/llm_calls/generate_web_search_query.py
+--------------------------------------------------------------------------------
+Path: servers/fastapi/utils/llm_calls/generate_web_search_query.py
+Responsibilities:
+  - Generates concise web search query from presentation content and
+    instructions using LLM structured output. Returns at most 12-word query.
+Role in System: Called by generate_presentation_outlines.py before web search.
+
+--------------------------------------------------------------------------------
+C13. utils/process_slides.py
+--------------------------------------------------------------------------------
+Path: servers/fastapi/utils/process_slides.py
+Responsibilities:
+  - Phase 5: asset generation and injection.
+  - process_slide_and_fetch_assets() — finds __image_prompt__ and
+    __icon_query__ fields, generates images via ImageGenerationService,
+    searches icons via ICON_FINDER_SERVICE, runs concurrently, injects URLs.
+  - process_old_and_new_slides_and_fetch_assets() — preserves existing assets
+    by matching prompts (avoids re-generating unchanged images/icons).
+  - process_slide_add_placeholder_assets() — sets placeholder URLs without
+    generation (for initial fast rendering).
+  - Handles both template-style fields (image_url/icon_url) and legacy dunder
+    fields (__image_url__/__icon_url__).
+Key Dependencies: services.image_generation_service, services.icon_finder_service,
+  models.image_prompt, models.sql.image_asset, models.sql.slide, utils.dict_utils
+Role in System: Called by presentation generation, slide editing, chat tools.
+
+--------------------------------------------------------------------------------
+C14. utils/outline_utils.py
+--------------------------------------------------------------------------------
+Path: servers/fastapi/utils/outline_utils.py
+Responsibilities:
+  - Outline mathematics and manipulation.
+  - get_no_of_outlines_to_generate_for_n_slides() — calculates outline count
+    (accounting for TOC slides).
+  - get_no_of_toc_required_for_n_outlines() — TOC count (1 per 10 slides).
+  - get_presentation_outline_model_with_toc() — inserts TOC slides at correct
+    positions with page references.
+  - get_presentation_title_from_presentation_outline() — extracts title from
+    first slide's markdown heading.
+  - get_images_for_slides_from_outline() — extracts image URLs from outline.
+Role in System: Called by presentation generation flow.
+
+--------------------------------------------------------------------------------
+C15. utils/ppt_utils.py
+--------------------------------------------------------------------------------
+Path: servers/fastapi/utils/ppt_utils.py
+Responsibilities:
+  - Layout selection helpers.
+  - select_toc_or_list_slide_layout_index() — finds TOC/list layout by regex.
+  - find_slide_layout_index_by_regex() — generic regex-based layout finder.
+Role in System: Called by presentation.py (TOC layout insertion).
+
+--------------------------------------------------------------------------------
+C16. constants/presentation.py
+--------------------------------------------------------------------------------
+Path: servers/fastapi/constants/presentation.py
+  - MAX_NUMBER_OF_SLIDES = 50
+  - MAX_OUTLINE_CONTENT_WORDS = 100
+  - DEFAULT_TEMPLATES — discovered from templates/ directory at runtime,
+    ordered by preference (momentum, dynamic, executive, general, modern,
+    standard, swift).
+
+================================================================================
+D. DOCUMENT INGESTION PIPELINE
+================================================================================
+
+The document ingestion pipeline converts uploaded files into text context
+for LLM-based outline generation.
+
+Entry Points:
+  1. api/v1/ppt/endpoints/files.py — /api/v1/ppt/files/upload
+     Uploads files to temp directory, returns temp file paths.
+  2. api/v1/ppt/endpoints/files.py — /api/v1/ppt/files/decompose
+     Parses uploaded files into text, returns DecomposedFileInfo list.
+
+Pipeline Flow:
+  1. File Upload (files.py):
+     - validate_files() checks extensions and size.
+     - TEMP_FILE_SERVICE.create_temp_dir() creates a sandboxed directory.
+     - Files saved to temp dir, paths returned.
+
+  2. File Decomposition (files.py):
+     - .txt files passed through directly.
+     - Other files: DocumentsLoader.load_documents(temp_dir).
+     - Parsed text saved as .txt files in temp dir.
+     - Returns DecomposedFileInfo(name, file_path) for each.
+
+  3. Document Loading (DocumentsLoader):
+     - Dispatches by extension:
+       PDF -> load_pdf(): _is_scanned_pdf() samples pages for text.
+         Scanned: _parse_with_liteparse(dpi=300) for OCR.
+         Digital: _parse_with_liteparse(dpi=None) for text extraction.
+       Text -> load_text(): direct read.
+       Office -> load_office_document(): OOXML/ODF parsing via zipfile+XML.
+       Image -> load_image(): convert to PNG -> _parse_with_liteparse(dpi=300).
+       Other -> _parse_with_liteparse().
+
+  4. LiteParse (LiteParseService):
+     - Spawns Node.js subprocess (liteparse_runner.mjs).
+     - Passes: --file, --ocr-enabled, --ocr-language, --dpi, --num-workers.
+     - Output: plain text (via temp file stdout) or JSON.
+     - Handles: PDF, images, and any format supported by @llamaindex/liteparse.
+
+  5. Text Cleaning (DocumentsLoader):
+     - clean_extracted_document_text() strips LiteParse JSON wrappers.
+
+  6. Context Injection:
+     - Parsed text joined and passed as additional_context to LLM outline
+       generation prompt.
+     - Also stored in mem0 for later retrieval
+       (MEM0_PRESENTATION_MEMORY_SERVICE.store_generation_context).
+
+Dependency Chain:
+  files.py -> TEMP_FILE_SERVICE -> DocumentsLoader ->
+    [LiteParseService (Node.js) | OfficeDocumentService (Python) |
+     DocumentConversionService (PIL)] -> clean_extracted_document_text ->
+  additional_context -> generate_ppt_outline (LLM)
+
+================================================================================
+E. MCP SERVER COMPONENT
+================================================================================
+
+--------------------------------------------------------------------------------
+E1. mcp_server.py
+--------------------------------------------------------------------------------
+Path: servers/fastapi/mcp_server.py
+Responsibilities:
+  - Creates a Model Context Protocol (MCP) server exposing a curated subset
+    of the Presenton HTTP API as MCP tools.
+  - Loads OpenAPI spec from openai_spec.json.
+  - Uses FastMCP.from_openapi() with MCP_ROUTE_MAPS:
+    - POST /api/v1/ppt/presentation/generate -> MCP TOOL (generate_presentation)
+    - POST /api/v1/ppt/presentation/generate/async -> MCP TOOL
+    - GET /api/v1/ppt/presentation/status/{id} -> MCP TOOL
+    - Everything else: MCPType.EXCLUDE
+  - Auth: PresentonTokenVerifier validates session tokens for MCP HTTP auth.
+    Auth enabled only when app auth is configured (not disabled).
+  - Auth forwarding: attach_request_auth_header() forwards MCP caller's token
+    to FastAPI backend via Authorization: Bearer ***.
+  - Runs as separate process on port 8001, pointing to FastAPI at 127.0.0.1:8000.
+  - Disabled in Electron desktop mode.
+  - 600-second timeout for long-running presentation generation.
+Key Dependencies: fastmcp, httpx, utils.get_env, utils.simple_auth
+Execution Flow:
+  main() -> check is_mcp_server_enabled() -> parse args ->
+  create_openapi_api_client() -> create_mcp_auth_provider() ->
+  create_mcp_server() -> mcp.run_async(transport="http", host, port).
+Role in System:
+  - Separate process alongside FastAPI server. Allows external MCP clients
+    (like Claude Desktop) to generate presentations via standardized tool
+    interface. The MCP server forwards requests to FastAPI with auth headers
+    preserved.
+
+================================================================================
+F. DEPENDENCY GRAPH BETWEEN COMPONENTS
+================================================================================
+
+F1. Bootstrap Chain:
+  server.py
+    -> api/main.py (app construction)
+      -> api/lifespan.py (startup/shutdown)
+        -> migrations.py (Alembic migrations)
+        -> services/database.py (DB engine + table creation)
+        -> templates/default_templates.py (seed templates)
+        -> utils/simple_auth.py (auth bootstrap)
+        -> utils/user_config.py (env from user config)
+        -> utils/model_availability.py (provider checks)
+      -> api/middlewares.py (request pipeline)
+        -> utils/simple_auth.py (session validation)
+        -> utils/user_config.py (env refresh)
+      -> api/v1/ppt/router.py (route registration)
+        -> 16 endpoint modules
+
+F2. Presentation Generation Flow (primary pipeline):
+  Endpoint (presentation.py)
+    -> TEMP_FILE_SERVICE (file path resolution)
+    -> DocumentsLoader (document parsing)
+      -> LiteParseService (Node.js OCR)
+      -> OfficeDocumentService (OOXML parsing)
+      -> DocumentConversionService (image conversion)
+    -> MEM0_PRESENTATION_MEMORY_SERVICE (context storage)
+    -> generate_ppt_outline (LLM: outline generation)
+      -> get_llm_config + get_model (provider config)
+      -> llmai.get_client (LLM client)
+      -> stream_generate_events (streaming)
+      -> generate_web_search_query (optional web search)
+    -> generate_presentation_structure (LLM: layout selection)
+      -> generate_structured_with_schema_retries
+    -> get_slide_content_from_type_and_outline (LLM: per-slide content)
+      -> generate_structured_with_schema_retries
+    -> process_slide_and_fetch_assets (asset generation)
+      -> ImageGenerationService (images)
+      -> ICON_FINDER_SERVICE (icons)
+    -> SQL persistence (SlideModel, ImageAsset)
+    -> WebhookService (event notification)
+
+F3. Chat Flow:
+  Endpoint (chat.py)
+    -> PresentationChatService
+      -> ChatConversationStore (SQL + mem0 history)
+        -> sql_chat_history (SQL persistence)
+        -> CHAT_MEMORY_STORE (mem0 semantic memory)
+      -> PresentationContextStore / memory_layer (deck state)
+      -> ChatTools (23 tools for presentation manipulation)
+        -> ImageGenerationService (generateAssets)
+        -> ICON_FINDER_SERVICE
+        -> DocumentsLoader (readSourceDocuments)
+        -> SQL models (SlideModel, PresentationModel, TemplateV2)
+      -> build_system_prompt (prompts.py)
+      -> get_llm_config + get_model + stream_generate_events (LLM)
+      -> MEM0_PRESENTATION_MEMORY_SERVICE (presentation memory)
+
+F4. LLM Infrastructure Stack:
+  All LLM calls use:
+    get_llm_config() [llm_config.py]
+      -> get_llm_provider() [llm_provider.py]
+      -> llmai ClientConfig (provider-specific)
+    get_model() [llm_provider.py]
+      -> constants/llm.py (defaults)
+    llmai.get_client(config) [external library]
+    client.generate(**kwargs) or stream_generate_events()
+      [llm_utils.py]
+    handle_llm_client_exceptions() [llm_client_error_handler.py]
+
+F5. Service Dependencies (simplified):
+  DocumentsLoader -> LiteParseService, OfficeDocumentService,
+                    DocumentConversionService, TempFileService
+  ImageGenerationService -> utils.get_env, utils.image_provider,
+                           utils.asset_directory_utils
+  IconFinderService -> fastembed_vectorstore, utils.path_helpers
+  ExportTaskService -> Node.js runtime, utils.asset_directory_utils,
+                      services.liteparse_service (shared utils)
+  Mem0PresentationMemoryService -> mem0_oss_memory (shared client)
+  ChatMemoryStore -> mem0_oss_memory (shared client)
+  PresentationChatService -> ChatConversationStore, ChatTools,
+                            PresentationContextStore, llm_utils,
+                            DocumentsLoader, mem0
+
+F6. Cross-Cutting Dependencies:
+  - services/database.py: used by every endpoint via Depends(get_async_session)
+  - services/temp_file_service.py: used by files, documents_loader,
+    presentation, chat
+  - utils/llm_config.py + utils/llm_provider.py + utils/llm_utils.py:
+    used by every LLM interaction
+  - utils/asset_directory_utils.py: used by images, slides, process_slides,
+    export, chat
+  - services/mem0_presentation_memory_service.py: used by outlines,
+    presentation, slide editing, chat
+  - utils/simple_auth.py: used by lifespan, middlewares, MCP server
+
+F7. External Runtime Dependencies:
+  - Node.js: LiteParse (document parsing), ExportTaskService (Puppeteer)
+  - LLM Providers: OpenAI, Anthropic, Google, Ollama, etc. (via llmai)
+  - Image Providers: Pexels, Pixabay, DALL-E, Gemini, ComfyUI, etc.
+  - mem0 OSS: Qdrant (on-disk), fastembed (ONNX embeddings), spaCy
+  - fastembed: AllMiniLML6V2 model (icon search)
+  - Database: SQLite (default) or PostgreSQL/MySQL
+  - Sentry (optional error tracking)
+
+================================================================================
+END OF DOMAIN 1 ANALYSIS
+================================================================================

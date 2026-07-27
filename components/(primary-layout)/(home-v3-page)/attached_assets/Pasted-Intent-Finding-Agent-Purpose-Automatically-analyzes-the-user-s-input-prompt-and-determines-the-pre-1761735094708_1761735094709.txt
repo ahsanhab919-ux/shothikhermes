@@ -1,0 +1,90 @@
+Intent-Finding Agent
+
+Purpose: Automatically analyzes the user’s input prompt and determines the presentation intent, guiding layout, tone, and structure generation.
+
+Core Capabilities:
+
+Extracts intent, context, and theme from natural-language prompts.
+
+Classifies the presentation type — e.g. pitch deck, educational lecture, marketing overview, research summary, technical demo.
+
+Suggests appropriate:
+
+Target audience (Executives, Developers, Students, General)
+
+Tone (Professional, Persuasive, Casual, Educational)
+
+Slide layout templates and color palettes
+
+Works before AI generation starts; populates slide metadata for regeneration models.
+
+2. AI Regeneration Engine
+
+Real-time streaming text simulation to visualize AI writing progress.
+
+Multiple generation modes:
+
+✏️ Rewrite Text Only — rephrases content while keeping layout.
+
+🎨 Redesign Layout — regenerates structure while preserving content.
+
+⚡ Full Regeneration — complete rebuild guided by the intent agent.
+
+Integrated Progress Bar and animated feedback using Framer Motion.
+
+Async-safe cleanup of streaming intervals and progress timers.
+
+3. Target Audience & Tone Customization
+
+Audience selector populated automatically by the intent agent:
+
+Executives, Developers, Students, General
+
+Tone options:
+
+Professional, Persuasive, Casual, Educational
+
+4. Dynamic Outline & Deck Control
+
+Left Outline Sidebar shows slide thumbnails, titles, and quick actions.
+
+Supports 10+ slides per deck, with live highlight on active slide.
+
+Actions:
+
+➕ Add New Slide
+
+💾 Save Version
+
+Version control system (v1, v2, v3...) maintains deck history.
+
+5. Responsive Canvas & Animation Layer
+
+Central 960×540 canvas (16:9 aspect) with smooth Framer Motion transitions.
+
+Real-time streaming mimics AI typing output.
+
+Indicators for collaboration: “Ahsan is editing title…”
+
+Core actions: Reset, Preview, Regenerate.
+
+6. Interactive Toolbar
+Tool	Function
+📝 Text	Edit slide text content
+🖼️ Image	Add or replace visuals
+✨ AI Regenerate	Trigger AI regeneration pipeline
+🔄 Reset	Revert to last saved state
+▶️ Preview	Enter full-screen preview
+📤 Upload Image	Embed image asset
+📊 Progress Bar	Displays generation status
+7. Realtime AI Stream Hooks
+
+useAIStream() and useTheme() hooks ready for:
+
+Socket presence updates (show collaborators)
+
+AI backend inference stream
+
+Export/Import slide templates
+
+Deck collaboration via WebRTC or Firestore

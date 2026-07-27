@@ -88,3 +88,4 @@ src/assets/(home-v3-page)/*.jpg
 .roo
 .trae
 .windsurf
+.env*

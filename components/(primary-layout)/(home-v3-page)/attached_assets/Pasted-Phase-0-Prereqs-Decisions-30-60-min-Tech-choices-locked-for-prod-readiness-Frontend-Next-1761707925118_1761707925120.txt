@@ -1,0 +1,419 @@
+Phase 0 — Prereqs & Decisions (30–60 min)
+
+Tech choices (locked for prod readiness):
+
+Frontend: Next.js 16 (App Router, TS), Tailwind, shadcn/ui, TanStack Query, Framer Motion.
+
+Backend: FastAPI (ASGI, async SQLAlchemy 2.x), PostgreSQL (Neon/Supabase), Redis (RQ) for jobs.
+
+Auth: JWT access + refresh (httpOnly cookies) or Clerk/Auth0 if you prefer managed.
+
+WS: Native FastAPI WebSocket with ack/idempotency.
+
+Observability: OpenTelemetry, JSON logs, Sentry errors.
+
+Deploy: Vercel (FE), Fly.io/Render/AWS ECS (BE), Neon/Supabase (DB), Upstash/Redis Cloud (Redis), S3/Cloudflare R2 (assets/exports).
+
+Create mono-repo:
+
+mkdir shothik-presenton && cd shothik-presenton
+git init
+mkdir -p servers/nextjs servers/fastapi infra .github/workflows
+
+Phase 1 — Monorepo & Environment (1–2 hrs)
+
+Root README & env contract
+
+Root .env.example with shared keys.
+
+Create per-app envs from this contract.
+
+/servers/nextjs/.env.local
+
+NEXT_PUBLIC_API_URL=http://localhost:8000
+NEXT_PUBLIC_WEBSOCKET_URL=ws://localhost:8000
+NEXT_PUBLIC_BRAND_PRIMARY=#00C471
+NEXT_PUBLIC_BRAND_DARK=#00844E
+
+
+/servers/fastapi/.env
+
+HOST=0.0.0.0
+PORT=8000
+CORS_ORIGINS=["http://localhost:3000"]
+DATABASE_URL=postgresql+asyncpg://USER:PASS@HOST:5432/DBNAME
+REDIS_URL=redis://:PASSWORD@HOST:6379/0
+JWT_SECRET=change_me
+ENV=dev
+S3_ENDPOINT=https://<r2-or-s3>
+S3_ACCESS_KEY=...
+S3_SECRET_KEY=...
+S3_BUCKET=shothik-exports
+
+Phase 2 — Database Schema & Migrations (½ day)
+
+Entities (finalized):
+
+decks(id, owner_id, title, created_at)
+
+deck_theme(deck_id PK, mode ENUM[light,dark,system], palette JSONB, updated_at)
+
+slides(id, deck_id FK, index INT, layout TEXT, notes TEXT, version INT, created_at, updated_at)
+
+Unique index: (deck_id, index)
+
+slide_blocks(id, slide_id FK, type ENUM[text,image,shape,code], payload JSONB, z_index INT, version INT)
+
+threads(id, deck_id FK, created_by, created_at)
+
+messages(id, thread_id FK, role ENUM[user,assistant,system], content JSONB, created_at)
+
+tool_events(id, thread_id FK, name TEXT, args JSONB, idempotency_key TEXT, created_at) (for WS replay/ack)
+
+Migrations (Alembic)
+
+Create all tables + indexes.
+
+JSONB for Postgres; if sqlite in dev, use sa.JSON.
+
+Acceptance
+
+alembic upgrade head
+# Connect with psql; \dt; ensure uniq index on slides(deck_id, index)
+
+Phase 3 — Backend App (FastAPI) (1–2 days)
+3.1 Project Layout
+servers/fastapi/
+  api/
+    main.py
+    deps.py
+    v1/
+      ppt/
+        router.py
+        endpoints/
+          decks.py
+          theme.py
+          slides.py
+          blocks.py
+          threads.py
+          messages.py
+          stream.py
+        schemas.py
+  core/
+    config.py       # Pydantic Settings
+    security.py     # JWT encode/decode, password hashing
+    rate_limit.py   # slowapi or custom limiter
+    logging.py      # JSON logging setup
+    telemetry.py    # OpenTelemetry instrumentation
+  db/
+    session.py      # async engine/session
+    models.py
+  services/
+    decks_service.py
+    slides_service.py
+    blocks_service.py
+    chat_service.py     # threads/messages logic
+    tools_service.py    # outline/rewrite routing
+    export_service.py   # pdf/pptx jobs
+  jobs/
+    queue.py         # RQ setup
+    workers.py       # worker entrypoint
+alembic/
+
+3.2 Core Setup
+
+main.py
+
+Add CORS, exception handlers.
+
+Mount /api/v1 router.
+
+Instrument OTel; use JSON logs.
+
+Add health endpoint /healthz.
+
+security.py
+
+JWT make/verify; @requires_auth dependency checks user + deck ownership.
+
+rate_limit.py
+
+Attach slowapi limiter on /threads/*, /messages, /stream/*.
+
+3.3 Services (business logic)
+
+slides_service.py
+
+create_slide(deck_id, after_index) – reorder neighbors with SELECT ... FOR UPDATE.
+
+update_slide(slide_id, dto) – version bump.
+
+delete_slide(slide_id) – close gaps in index.
+
+blocks_service.py
+
+Pydantic payload validators per block type with versioning (v: 1).
+
+update_block_versioned(block_id, payload, expect_version) – optimistic concurrency.
+
+chat_service.py
+
+CRUD for threads/messages; sanitize content.
+
+When posting user message, enqueue planning (optional) or rely on WS path.
+
+tools_service.py
+
+Map parsed commands → tool events
+
+outline(count) → emit tool event (server or client applies).
+
+rewrite(target, text) → event; allow server-side apply via service or client apply.
+
+export_service.py
+
+enqueue_export(deck_id, type) → RQ job using Playwright to render /deck/[id]/print → uploads to S3 → returns signed URL; progress via Redis pubsub → WS.
+
+3.4 Routers & WS
+
+endpoints/
+
+Deployed now: decks, theme, slides, blocks, threads, messages, stream.
+
+All write routes use service layer; do not place business logic in routers.
+
+WebSocket /api/v1/ppt/stream/{thread_id}:
+
+Accepts JSON user messages or command JSON.
+
+Emits {type:"token", delta, done} and {type:"tool", id, name, args}.
+
+Requires client ack: {type:"ack", id}; save to tool_events with idempotency_key.
+
+On reconnect, replay un-acked events.
+
+Acceptance
+
+pytest API/WS smoke tests pass.
+
+curl of slides/blocks works.
+
+Phase 4 — Frontend App (Next.js 16) (1–2 days)
+4.1 Install & Base
+cd servers/nextjs
+npm init -y
+npm i next@latest react react-dom typescript @types/node -D
+npm i tailwindcss postcss autoprefixer class-variance-authority tailwind-merge framer-motion lucide-react clsx @tanstack/react-query
+npx tailwindcss init -p
+
+
+tailwind.config.ts → darkMode: "class", include app/components.
+
+app/layout.tsx
+
+<QueryClientProvider>, ThemeProvider.
+
+Global toasts container.
+
+4.2 Structure
+components/
+  brand/BrandShell.tsx
+  editor/
+    EditorShell.tsx
+    SlideOutline.tsx
+    SlideCanvas.tsx
+    RightTabs.tsx
+  chat/
+    ChatPanel.tsx
+hooks/
+  useDeckTheme.ts
+  useSlides.ts           # uses TanStack Query + mutations
+  useChat.ts             # from earlier; integrate with Query if needed
+lib/
+  api.ts                 # fetch wrapper with baseURL + auth cookie
+  ws.ts                  # ws manager with backoff, heartbeat, acks
+app/(generator)/
+  deck/page.tsx          # deck list
+  deck/[id]/page.tsx     # editor page
+app/(generator)/deck/[id]/print/page.tsx  # print route for export
+
+
+api.ts (fetch wrapper)
+
+Adds credentials: "include", JSON parsing, error handling.
+
+ws.ts
+
+Connect with backoff; ping/pong; queue unsent messages; handle {type:"tool"} and require ack.
+
+4.3 Editor UI
+
+EditorShell.tsx
+
+3-pane grid: grid-cols-[240px_1fr_360px].
+
+Top bar: deck title, “Preview”, “Export”, Theme toggle.
+
+Keyboard: ↑/↓ to change focused slide; ⌘/Ctrl+D duplicate slide.
+
+SlideOutline.tsx
+
+List slides with thumbnails (generated lazily).
+
+Drag-to-reorder → optimistic reorder; on failure, rollback.
+
+SlideCanvas.tsx
+
+Renders blocks: text, image, shape, code.
+
+Inline text editing; debounced save (250–500ms).
+
+Block frame handles (resize/drag) — phase 2.
+
+RightTabs.tsx
+
+Tabs: Chat | Content | Style | Assets.
+
+Chat → ChatPanel with onToolEvent calling useSlides mutations.
+
+Style → ThemePicker (already built).
+
+4.4 Data Hooks
+
+useSlides.ts (with TanStack Query)
+
+useSlides(deckId) → queryKey: ['slides', deckId]
+
+addSlide, updateBlock, deleteSlide → mutations with optimistic updates and rollback.
+
+useChat.ts
+
+Already provided; ensure it calls onToolEvent.
+
+Persist messages via REST; stream tokens via WS; send ack on tool.
+
+4.5 Preview & Export
+
+Use html-to-image to render slide DOM to PNG for thumbnails.
+
+Preview modal showing the PNG render or live DOM in a lightbox.
+
+Export button → calls /export/pdf which enqueues job; progress comes via WS; on completion, show download URL.
+
+Acceptance
+
+Create deck → /deck/[id]
+
+/outline 5 in chat → 5 slides appear.
+
+/rewrite slide 2 Make it punchy → slide 2 text updates.
+
+Change theme → persists after reload.
+
+Preview works; export triggers job and returns URL (stub ok).
+
+Phase 5 — Auth, Security, Tenancy (½–1 day)
+
+Add login (Clerk/Auth0) or roll your own JWT (access + refresh).
+
+All routes check deck ownership (or shared) via dependency.
+
+Rate limiting on chat/stream routes.
+
+Sanitize input; validate all payloads with Pydantic.
+
+Phase 6 — Background Jobs & Exports (1–2 days)
+
+RQ + Redis:
+
+export_service.py → Playwright prints /deck/[id]/print.
+
+Store artifact in S3/R2; save record exports(id, deck_id, type, url, status, created_at).
+
+Push progress updates through Redis pubsub → WS sends {type:"token", delta: "Export 60%…"}
+
+Job worker process (jobs/workers.py) deployed separately.
+
+Phase 7 — Observability & Ops (1 day)
+
+OpenTelemetry:
+
+Instrument FastAPI, SQLAlchemy, RQ.
+
+Logging: JSON logs with request_id; propagate to frontend for debugging IDs.
+
+Sentry: FE+BE error capture.
+
+Metrics: Prometheus/OTLP → Grafana dashboards (p95 latency, WS errors, export time).
+
+Phase 8 — Testing (1–2 days)
+
+Backend (pytest):
+
+Unit: services (slides/block changes, reorder invariants).
+
+API: create deck/slide/block; reorder; 409 on unique index.
+
+WS: websocket_connect → send user msg; receive tokens; tool event; ack; replay after reconnect.
+
+Frontend:
+
+Unit: utility functions.
+
+Component: SlideCanvas text update (debounced save).
+
+E2E (Playwright): create deck → outline → rewrite → preview → export (mock) → download.
+
+Phase 9 — CI/CD (1 day)
+
+GitHub Actions:
+
+backend.yml: lint (ruff), type-check (pyright), pytest, build Docker, push; run alembic upgrade head on deploy.
+
+frontend.yml: install, build, unit tests, upload artifacts.
+
+deploy: Vercel for FE; Fly.io/Render for BE; Neon migrations; set secrets in repo.
+
+Infra backups & policies:
+
+Daily Neon logical backups.
+
+S3 lifecycle rules for exports.
+
+Redis persistence off (stateless), ok.
+
+Phase 10 — Hardening & Roadmap
+
+Concurrency control on blocks via version; reject if stale, prompt user to reload.
+
+Presence & collaboration: add room WS + ghost cursors (phase 2).
+
+PPTX export using python-pptx mapping; keep as async job.
+
+Asset uploads with pre-signed URLs; image block uses final S3 URL.
+
+RBAC/Sharing: invite emails; viewer/editor roles per deck.
+
+Copy-Paste Acceptance Script (local)
+
+Backend
+
+cd servers/fastapi
+uvicorn api.main:app --reload --port 8000
+# health
+curl -s localhost:8000/healthz
+# create deck
+curl -s -X POST localhost:8000/api/v1/ppt/decks -H "Content-Type: application/json" \
+  -d '{"title":"Launch Plan","owner_id":"11111111-1111-1111-1111-111111111111"}'
+
+
+Frontend
+
+cd servers/nextjs
+npm i && npm run dev
+# open http://localhost:3000/deck → create deck → open
+
+
+WS quick check
+
+Connect ws://localhost:8000/api/v1/ppt/stream/<THREAD_ID> with a client; send {"content":{"text":"/outline 5"}}; see tokens + tool event; ensure ack sent back.

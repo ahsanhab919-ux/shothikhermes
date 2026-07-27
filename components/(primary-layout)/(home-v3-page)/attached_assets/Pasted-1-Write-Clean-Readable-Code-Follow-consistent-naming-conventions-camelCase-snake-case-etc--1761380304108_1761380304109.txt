@@ -1,0 +1,73 @@
+1. Write Clean, Readable Code
+
+Follow consistent naming conventions (camelCase, snake_case, etc.).
+
+Use proper indentation and spacing.
+
+Write self-explanatory code — if someone new reads it, they should understand what it does.
+
+🧠 2. Follow Coding Standards and Style Guides
+
+Adhere to your team’s or language’s style guide (e.g., PEP8 for Python, Airbnb Style Guide for JavaScript).
+
+Use linters and formatters (e.g., ESLint, Prettier, Black) to enforce consistency automatically.
+
+🔒 3. Handle Errors and Exceptions Gracefully
+
+Never let your app crash unexpectedly.
+
+Catch and log errors properly.
+
+Show user-friendly messages for failures instead of raw error stacks.
+
+🧱 4. Write Modular and Reusable Code
+
+Break large functions into small, testable components.
+
+Avoid code duplication by creating reusable utilities or helpers.
+
+Follow DRY (Don’t Repeat Yourself) and SOLID principles. Write unit, integration, and end-to-end tests.
+
+Automate testing as part of CI/CD pipelines.
+
+Aim for good coverage, but prioritize critical business logic over 100% coverage.
+
+🚀 6. Optimize for Performance and Scalability
+
+Write efficient algorithms and queries.
+
+Avoid unnecessary computation or network calls.
+
+Measure performance using profiling tools — don’t guess.
+
+🔐 7. Prioritize Security
+
+Validate and sanitize all user inputs (to prevent SQL injection, XSS, etc.).
+
+Use secure storage for secrets and credentials.
+
+Always keep dependencies updated and check for vulnerabilities.
+
+🧰 8. Use Version Control Properly
+
+Commit small, meaningful changes with clear messages.
+
+Use branches for new features or fixes.
+
+Review and test code before merging (e.g., via pull requests).
+
+🧾 9. Document Your Code and APIs
+
+Write docstrings or comments for complex logic.
+
+Maintain updated README and API docs.
+
+Document setup, dependencies, and deployment steps.
+
+⚙️ 10. Monitor and Log in Production
+
+Use structured logging (e.g., JSON logs).
+
+Set up monitoring, alerts, and metrics (e.g., Prometheus, Datadog).
+
+Be ready to debug live issues with logs and observability tools. 

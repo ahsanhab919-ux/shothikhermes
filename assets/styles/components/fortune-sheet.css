@@ -1,0 +1,106 @@
+.fortune-sheet-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 400px;
+  border-radius: 0.75rem;
+  overflow: hidden;
+  border: 1px solid hsl(var(--border));
+}
+
+.fortune-sheet-container .luckysheet {
+  font-family: inherit;
+}
+
+.fortune-sheet-container .luckysheet-wa-editor {
+  font-family: inherit;
+}
+
+.dark .fortune-sheet-container .luckysheet-cell-main {
+  background-color: hsl(var(--background));
+}
+
+.dark .fortune-sheet-container .luckysheet {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+
+.dark .fortune-sheet-container .luckysheet-cols-h-cells .luckysheet-cols-h-cells-c,
+.dark .fortune-sheet-container .luckysheet-rows-h-cells .luckysheet-rows-h-cells-c {
+  background-color: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+  border-color: hsl(var(--border));
+}
+
+.dark .fortune-sheet-container .luckysheet-sheet-area {
+  background-color: hsl(var(--background));
+  border-color: hsl(var(--border));
+}
+
+.dark .fortune-sheet-container .luckysheet-wa-editor,
+.dark .fortune-sheet-container .luckysheet-toolbar {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  border-color: hsl(var(--border));
+}
+
+.dark .fortune-sheet-container .luckysheet-toolbar .btn,
+.dark .fortune-sheet-container .luckysheet-toolbar button {
+  color: hsl(var(--foreground));
+}
+
+.dark .fortune-sheet-container .luckysheet-toolbar .btn:hover,
+.dark .fortune-sheet-container .luckysheet-toolbar button:hover {
+  background-color: hsl(var(--accent));
+}
+
+.dark .fortune-sheet-container .fortune-sheet-toolbar {
+  background-color: hsl(var(--background));
+  border-color: hsl(var(--border));
+}
+
+.dark .fortune-sheet-container .fortune-sheet-toolbar button {
+  color: hsl(var(--foreground));
+}
+
+.dark .fortune-sheet-container .fortune-sheet-toolbar button:hover {
+  background-color: hsl(var(--accent));
+}
+
+.dark .fortune-sheet-container .luckysheet-input-box {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  border-color: hsl(var(--border));
+}
+
+.dark .fortune-sheet-container .luckysheet-grid-window {
+  background-color: hsl(var(--background));
+}
+
+.dark .fortune-sheet-container .luckysheet-stat-area {
+  background-color: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+  border-color: hsl(var(--border));
+}
+
+.dark .fortune-sheet-container .luckysheet-scrollbar-y,
+.dark .fortune-sheet-container .luckysheet-scrollbar-x {
+  background-color: hsl(var(--muted));
+}
+
+.dark .fortune-sheet-container .luckysheet-scrollbar-y .luckysheet-scrollbar-y-handle,
+.dark .fortune-sheet-container .luckysheet-scrollbar-x .luckysheet-scrollbar-x-handle {
+  background-color: hsl(var(--muted-foreground) / 0.3);
+}
+
+.dark .fortune-sheet-container .luckysheet-formula-bar {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  border-color: hsl(var(--border));
+}
+
+@media (max-width: 768px) {
+  .fortune-sheet-container {
+    min-height: 300px;
+  }
+}

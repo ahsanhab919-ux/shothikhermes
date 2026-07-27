@@ -1,0 +1,100 @@
+================================================================================
+PRESENTON BACKEND ANALYSIS — MASTER INDEX
+================================================================================
+Repository: https://github.com/presenton/presenton.git
+License:   Apache 2.0
+Analysis:  Backend-only, for Shothik/Hermes integration
+Date:      2026-07-25
+Analyzer:  Hermes Agent (z-ai/glm-5.2)
+
+ARCHITECTURE OVERVIEW
+--------------------------------------------------------------------------------
+Presenton is an open-source AI presentation generator with a Python (FastAPI)
+backend and a Next.js frontend. The backend (servers/fastapi/) handles:
+  - LLM-orchestrated presentation generation (16 LLM providers)
+  - Document ingestion (PDF, Word, PPT, Excel, images via OCR)
+  - Template system (v1 schema-first, v2 component-based with 11 element types)
+  - PPTX/PDF export via headless Chromium + Puppeteer
+  - Image generation (9 providers) and icon search (local vector embeddings)
+  - Chat-based presentation editing (23 LLM tool calls)
+  - MCP server for external tool integration
+  - Webhook event notifications
+  - Semantic memory via mem0 OSS (Qdrant + fastembed + spaCy)
+
+The Shothik integration keeps the Next.js frontend unchanged and treats Hermes
+as the backend orchestrator. Presenton's architecture informs which backend
+components to lift (Tier 1), adapt (Tier 2), or use as inspiration (Tier 3).
+
+ARTIFACT INDEX
+--------------------------------------------------------------------------------
+File                                          | Domain | Size  | Content
+----------------------------------------------|--------|-------|------------------
+01-modular-engine-components.txt               |   1    | ~46KB | Component
+                                              |        |       | decomposition:
+                                              |        |       | bootstrap, services,
+                                              |        |       | LLM pipeline,
+                                              |        |       | document ingestion,
+                                              |        |       | MCP, dependency graph
+----------------------------------------------|--------|-------|------------------
+02-api-surface.txt                            |   2    | ~26KB | All endpoints,
+                                              |        |       | schemas, auth,
+                                              |        |       | external integrations
+----------------------------------------------|--------|-------|------------------
+03-storage-model.txt                          |   3    | ~21KB | DB engine, 14 SQL
+                                              |        |       | tables, 16 migrations,
+                                              |        |       | file-system layout,
+                                              |        |       | caching, validation
+----------------------------------------------|--------|-------|------------------
+04-rendering-export-pipeline.txt              |   4    | ~20KB | PPTX/PDF/HTML/JSON
+                                              |        |       | export, template v1/v2,
+                                              |        |       | theme system, preview,
+                                              |        |       | image/icon pipeline
+----------------------------------------------|--------|-------|------------------
+05-reusability-assessment.txt                 |   5    | ~29KB | Tier 1 (directly
+                                              |        |       | reusable), Tier 2
+                                              |        |       | (adaptable), Tier 3
+                                              |        |       | (inspiration only),
+                                              |        |       | priority matrix
+----------------------------------------------|--------|-------|------------------
+
+KEY FINDINGS
+--------------------------------------------------------------------------------
+1. The 4-phase generation pipeline (outline -> structure -> slide content ->
+   assets) is the core architectural pattern to adopt.
+
+2. Template v2's 11-element discriminated union (text, image, chart, table,
+   vector, infographic, flex, grid, container, group, text-list) with JSON
+   Schema generation is the most reusable structural asset.
+
+3. The llmai library dependency is the primary blocker for direct code reuse —
+   every LLM call site depends on it. Must be replaced with Hermes routing.
+
+4. The Node.js + Puppeteer export pipeline is a critical architectural
+   constraint: PPTX/PDF export requires a running Next.js frontend. Shothik's
+   frontend stays unchanged, so this pipeline can work if pointed correctly.
+
+5. The mem0 OSS memory system adds heavy dependencies (Qdrant, spaCy, ONNX).
+   Hermes should use InsForge's vector search or its own memory system.
+
+6. The Shothik frontend remains unchanged; Hermes replaces presenton's
+   FastAPI backend as the orchestrator, with InsForge for DB/auth/storage.
+
+EXECUTION INSTRUCTIONS FOR HERMES TEAM
+--------------------------------------------------------------------------------
+The 5 domain analysis files contain implementation-grade detail sufficient
+to produce execution instructions. Recommended reading order:
+
+1. Start with 05-reusability-assessment.txt for the Tier 1/2/3 classification
+   and priority matrix.
+2. Read 01-modular-engine-components.txt for the component architecture and
+   dependency graph.
+3. Read 02-api-surface.txt for the exact API contract to reproduce.
+4. Read 03-storage-model.txt for the data model to map to InsForge tables.
+5. Read 04-rendering-export-pipeline.txt for the export pipeline integration
+   points with the Shothik frontend.
+
+Each file is self-contained plain text (no markdown) for terminal reading.
+
+================================================================================
+END OF MASTER INDEX
+================================================================================

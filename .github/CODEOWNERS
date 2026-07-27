@@ -1,0 +1,37 @@
+# Interim ownership map for shothik-web.
+# Replace individual owners with GitHub teams as the engineering organization grows.
+
+* @shothikwork
+
+# Platform and CI
+/.github/ @shothikwork
+/docs/ @shothikwork
+/Dockerfile @shothikwork
+/pnpm-lock.yaml @shothikwork
+/package.json @shothikwork
+
+# Frontend runtime
+/app/ @shothikwork
+/components/ @shothikwork
+/hooks/ @shothikwork
+/lib/ @shothikwork
+/providers/ @shothikwork
+/redux/ @shothikwork
+/services/ @shothikwork
+/public/ @shothikwork
+
+# Data and integration layers
+/convex/ @shothikwork
+/config/ @shothikwork
+/models/ @shothikwork
+/types/ @shothikwork
+/utils/ @shothikwork
+
+# Critical security and payments
+/app/api/stripe/ @shothikwork
+/app/api/razorpay/ @shothikwork
+/app/api/bkash/ @shothikwork
+/app/api/twin/ @shothikwork
+/lib/security/ @shothikwork
+/lib/auth.ts @shothikwork
+/lib/agent-auth.ts @shothikwork

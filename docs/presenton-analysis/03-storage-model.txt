@@ -1,0 +1,457 @@
+================================================================================
+DOMAIN 3: FULL STORAGE MODEL — PRESENTON FASTAPI BACKEND
+================================================================================
+Implementation-grade analysis of database schemas, file-system storage,
+caching, migrations, and validation.
+
+--------------------------------------------------------------------------------
+(a) DATABASE ENGINE CONFIGURATION
+--------------------------------------------------------------------------------
+
+Engine: SQLAlchemy AsyncEngine via sqlmodel, created in services/database.py.
+URL resolution (utils/db_utils.py:get_database_url_and_connect_args):
+  - Source: env var DATABASE_URL (via get_database_url_env).
+  - Default when DATABASE_URL unset: "sqlite:///<APP_DATA_DIRECTORY>/fastapi.db"
+    (APP_DATA_DIRECTORY from env, fallback "/tmp/presenton").
+  - Parent directory auto-created for SQLite URLs.
+  - Windows path normalization for sqlite URLs (/C:/... -> C:/...).
+
+Driver selection (automatic based on URL scheme):
+  - sqlite://       -> sqlite+aiosqlite://  (async SQLite driver)
+  - postgresql://   -> postgresql+asyncpg://  (async PostgreSQL)
+  - mysql://        -> mysql+aiomysql://  (async MySQL)
+  - Other schemes passed through as-is.
+
+Connection args:
+  - SQLite: {"check_same_thread": False}
+  - PostgreSQL with sslmode != disable: ssl context via ssl.create_default_context()
+  - Query params stripped from URL after extraction.
+
+Pool configuration (get_pool_kwargs, non-SQLite only):
+  - DB_POOL_SIZE (default 5)
+  - DB_MAX_OVERFLOW (default 10)
+  - DB_POOL_TIMEOUT (default 30)
+  - DB_POOL_RECYCLE (default 1800)
+  - DB_POOL_PRE_PING (default true)
+
+Session factory: async_sessionmaker(sql_engine, expire_on_commit=False)
+Per-request: get_async_session() — FastAPI dependency yielding AsyncSession.
+
+Table creation:
+  - When MIGRATE_DATABASE_ON_STARTUP is not "true": SQLModel.metadata.create_all()
+    with explicit table list (14 tables).
+  - When MIGRATE_DATABASE_ON_STARTUP is "true": Alembic migrations run instead
+    (migrations.py -> Alembic command.stamp/upgrade).
+
+Sync URL conversion (to_sync_sqlalchemy_url for Alembic):
+  - sqlite+aiosqlite:///  -> sqlite:///
+  - postgresql+asyncpg:// -> postgresql+psycopg:// (psycopg3, no psycopg2 needed)
+  - mysql+aiomysql://     -> mysql+pymysql://
+
+Alembic env (alembic/env.py):
+  - target_metadata = SQLModel.metadata (all 14 models imported to register tables).
+  - URL resolution prefers config-set "sqlalchemy.url" (injected by migrations.py),
+    falls back to DATABASE_URL env, then local SQLite.
+  - compare_type=True for both offline and online migrations.
+  - Online uses NullPool.
+
+--------------------------------------------------------------------------------
+(b) SQL TABLES / MODELS (all 14)
+--------------------------------------------------------------------------------
+
+All models are SQLModel (table=True). Conventions:
+  - UUID primary keys use uuid.uuid4 default factory.
+  - Timestamps use DateTime(timezone=True) with get_current_utc_datetime default.
+  - JSON columns via Column(JSON).
+  - Enum storage via SAEnum with native_enum=False.
+
+1. presentations (PresentationModel)
+  - id: uuid.UUID, PK, default uuid.uuid4
+  - version: PresentationVersion enum ("v1-standard" | "v2-standard"), non-null
+  - content: str (non-null) — the original user prompt/source text
+  - n_slides: int (non-null)
+  - language: str (non-null)
+  - title: Optional[str]
+  - file_paths: Optional[List[str]] (JSON)
+  - outlines: Optional[dict] (JSON) — PresentationOutlineModel serialized
+  - created_at: datetime (tz, non-null)
+  - updated_at: datetime (tz, non-null, onupdate=get_current_utc_datetime)
+  - layout: Optional[dict] (JSON) — PresentationLayoutModel serialized
+  - structure: Optional[dict] (JSON) — PresentationStructureModel serialized
+  - instructions: Optional[str]
+  - tone: Optional[str]
+  - verbosity: Optional[str]
+  - include_table_of_contents: bool (default false)
+  - include_title_slide: bool (default true)
+  - web_search: bool (default false)
+  - theme: Optional[dict] (JSON)
+  - fonts: Optional[dict] (JSON)
+  Helpers: get_new_presentation(), get_presentation_outline(), get_layout(),
+           set_layout(), get_structure(), set_structure().
+
+2. slides (SlideModel)
+  - id: uuid.UUID, PK, default uuid.uuid4
+  - presentation: uuid.UUID, FK -> presentations.id ON DELETE CASCADE, indexed
+  - layout_group: str (non-null)
+  - layout: str (non-null)
+  - index: int (non-null)
+  - content: dict (JSON, non-null) — structured slide content
+  - html_content: Optional[str]
+  - speaker_note: Optional[str]
+  - properties: Optional[dict] (JSON)
+  - ui: Optional[dict] (JSON, nullable) — hydrated template UI components
+  Helper: get_new_slide(presentation, content) -> cloned SlideModel with new UUID.
+
+3. template_v2 (TemplateV2)
+  - id: str, PK, default str(uuid.uuid4())
+  - name: str (non-null)
+  - description: Optional[str]
+  - raw_layouts: Optional[dict] (JSON, nullable) — RawSlideLayouts from PPTX extraction
+  - components: Optional[dict] (JSON, nullable)
+  - merged_components: Optional[dict] (JSON, nullable) — MergedComponents
+  - layouts: Optional[dict] (JSON, nullable) — SlideLayouts (complete slide definitions)
+  - assets: Optional[dict] (JSON, nullable) — {icon_type, icon_weight, fonts,
+    slide_image_urls, images, layout_indexes, thumbnail, pptx_url}
+  - is_default: bool (default false, non-null)
+  - created_at: datetime (tz, non-null)
+  - updated_at: datetime (tz, non-null, onupdate)
+  Note: ID is string (not UUID) — changed by migration 3f2a1b4c5d6e.
+
+4. async_tasks (AsyncTaskModel)
+  - id: str, PK, default "task-"+token_hex(32)
+  - type: str (indexed) — "presentation.generate" | "template.create"
+  - status: AsyncTaskStatus (String, indexed, non-null) — pending|completed|error
+  - message: Optional[str]
+  - error: Optional[dict[str, Any]] (JSON)
+  - data: Optional[dict[str, Any]] (JSON) — progress: {created_slides,
+    remaining_slides} or {created_layouts, remaining_layouts, name, thumbnail}
+  - created_at: datetime (tz, non-null)
+  - updated_at: datetime (tz, non-null, onupdate)
+
+5. async_presentation_generation_tasks (AsyncPresentationGenerationTaskModel) — LEGACY
+  - id: str, PK, default "task-"+token_hex(32)
+  - status: str
+  - message: Optional[str]
+  - error: Optional[dict] (JSON)
+  - created_at: datetime (default datetime.now — NOT tz-aware)
+  - updated_at: datetime (default datetime.now — NOT tz-aware)
+  - data: Optional[dict] (JSON)
+  Superseded by AsyncTaskModel for new flows. No indexes beyond PK.
+
+6. chat_history_messages (ChatHistoryMessageModel)
+  - id: uuid.UUID, PK
+  - presentation_id: Optional[uuid.UUID], FK -> presentations.id CASCADE, indexed, nullable
+  - template_v2_id: Optional[str], FK -> template_v2.id CASCADE, indexed, nullable
+  - conversation_id: uuid.UUID (indexed)
+  - position: int (indexed, >=1) — message ordering within conversation
+  - role: str — "user" | "assistant"
+  - content: str (Text, non-null)
+  - created_at: datetime (tz, non-null)
+  - tool_calls: Optional[list[str]] (JSON)
+  Note: Both presentation_id and template_v2_id are nullable to support
+  template-only chats (migration 1d9a4c7b8e2f).
+
+7. image_assets (ImageAsset)
+  - id: uuid.UUID, PK
+  - created_at: datetime (tz, non-null)
+  - is_uploaded: bool (default false) — distinguishes AI-generated from user-uploaded
+  - path: str (non-null) — filesystem path under APP_DATA_DIRECTORY/images/
+  - extras: Optional[dict] (JSON)
+
+8. font_uploads (FontUpload)
+  - id: uuid.UUID, PK
+  - created_at: datetime (tz, non-null)
+  - filename: str (non-null)
+  - path: str (non-null) — filesystem path under APP_DATA_DIRECTORY/fonts/
+  - normalized_family_name: str (indexed)
+  - family_name: Optional[str]
+  - subfamily_name: Optional[str]
+  - full_name: Optional[str]
+  - postscript_name: Optional[str]
+  - weight_class: Optional[int]
+  - width_class: Optional[int]
+  - format: Optional[str]
+  - size_bytes: int (non-null)
+  - extras: Optional[dict] (JSON)
+
+9. key_value (KeyValueSqlModel) — table name is lowercase class name
+  - id: uuid.UUID, PK
+  - key: str (indexed, non-unique) — e.g. "presentation_custom_themes"
+  - value: dict (JSON)
+  Generic key-value cache. Used for themes storage and ad-hoc state.
+
+10. ollama_pull_statuses (OllamaPullStatus) — table name is lowercase class name
+  - id: str, PK (caller-supplied, typically model name)
+  - last_updated: DateTime (nullable, default datetime.now — NOT tz-aware)
+  - status: dict (JSON)
+
+11. templates (TemplateModel) — LEGACY V1
+  - id: uuid.UUID, PK (matches presentation_id)
+  - name: str
+  - description: Optional[str]
+  - created_at: datetime (tz)
+
+12. template_create_infos (TemplateCreateInfoModel)
+  - id: uuid.UUID, PK
+  - fonts: Optional[dict[str, str]] (JSON, nullable)
+  - pptx_url: Optional[str]
+  - slide_htmls: list[str] (JSON, non-null)
+  - slide_image_urls: list[str] (JSON, non-null)
+  - created_at: datetime (tz)
+
+13. presentation_layout_codes (PresentationLayoutCodeModel)
+  - id: Optional[int], PK, autoincrement
+  - presentation: uuid.UUID (indexed)
+  - layout_id: str
+  - layout_name: str
+  - layout_code: str (Text) — TSX/React component source code
+  - fonts: Optional[dict[str,str] | list[str]] (JSON, nullable)
+  - created_at: datetime (tz)
+  - updated_at: datetime (tz, onupdate)
+
+14. webhook_subscriptions (WebhookSubscription)
+  - id: str, PK, default "webhook-"+token_hex(32)
+  - created_at: datetime (tz)
+  - url: str
+  - secret: Optional[str] — used as Bearer token when firing webhook
+  - event: str (indexed) — WebhookEvent value
+
+Relationships summary:
+  - presentations 1--* slides (FK CASCADE, indexed)
+  - presentations 1--* chat_history_messages (FK CASCADE, indexed, nullable)
+  - template_v2 1--* chat_history_messages (FK CASCADE, indexed, nullable)
+  - All other tables are standalone (no FK relationships).
+
+--------------------------------------------------------------------------------
+(c) MIGRATION HISTORY (Alembic)
+--------------------------------------------------------------------------------
+
+Migration directory: servers/fastapi/alembic/versions/
+16 migration files, ordered chronologically:
+
+1. 00b3c27a13bc_init.py — Initial schema
+   Creates: presentations, slides, key_value, templates, presentation_layout_codes,
+   ollama_pull_statuses, webhook_subscriptions.
+   Presentations table includes: id, content, n_slides_optional, language,
+   title, file_paths, outlines, created_at, updated_at, layout, structure,
+   instructions, tone, verbosity, include_table_of_contents, include_title_slide,
+   web_search.
+
+2. f42ad4074449_add_theme_column_to_presentations.py
+   Adds: theme (JSON) column to presentations.
+
+3. 82abdbc476a7_add_theme_column_to_presentations.py
+   Duplicate/alternative theme column migration (adds theme column if not exists).
+
+4. c7b70d0f31b1_added_chat_history_messages_table.py
+   Creates: chat_history_messages with FK to presentations (CASCADE).
+   Columns: id, presentation_id, conversation_id, position, role, content,
+   created_at.
+
+5. 6e4a1b2c3d5f_add_template_v2_and_presentation_version.py
+   Creates: template_v2 table (with UUID id).
+   Adds: version column to presentations (v1-standard default).
+   Adds: ui column to slides (JSON, nullable).
+
+6. 1d9a4c7b8e2f_add_template_v2_chat_scope.py
+   Adds: template_v2_id column to chat_history_messages (FK template_v2.id CASCADE).
+   Makes chat_history_messages.presentation_id nullable (template-only chats).
+
+7. 2c8f4a1b9d7e_make_template_v2_layouts_nullable.py
+   Alters: template_v2.layouts from non-null to nullable.
+
+8. 3f2a1b4c5d6e_template_v2_ids_to_strings.py
+   Alters: template_v2.id from UUID to AutoString (non-null).
+   Alters: chat_history_messages.template_v2_id from UUID to AutoString (nullable).
+   Uses postgresql_using cast for Postgres; batch_alter_table recreate="always"
+   for SQLite. Normalizes SQLite UUID hex strings to canonical 36-char dashed form.
+
+9. 4b7c9d0e1f2a_add_is_default_to_template_v2.py
+   Adds: is_default (bool, default false) to template_v2.
+
+10. 8a6c4d2e1f30_add_merged_components_to_template_v2.py
+    Adds: merged_components (JSON, nullable) to template_v2.
+
+11. 95b5127e93cd_template_create_info.py
+    Creates: template_create_infos table.
+
+12. 5d7e9a1b2c3f_add_font_uploads.py
+    Creates: font_uploads table with normalized_family_name index.
+
+13. a7d4c9e2f1b3_add_async_tasks.py
+    Creates: async_tasks table (type, status, message, error, data, timestamps).
+
+14. b8e2f4a7c9d1_normalize_async_task_statuses.py
+    Normalizes existing async task status values to AsyncTaskStatus enum values.
+
+15. 9b2d1c4e5f6a_add_fonts_column_to_presentations.py
+    Adds: fonts (JSON) column to presentations.
+
+16. 7f5b2c3d4e6a_add_slide_ui.py
+    Adds: ui column to slides (JSON, nullable) — may duplicate migration 6e4a1b2c3d5f.
+
+Migration execution (migrations.py):
+  - migrate_database_on_startup():
+    1. Resolves async DB URL -> sync URL via to_sync_sqlalchemy_url().
+    2. Creates sync engine.
+    3. If MIGRATE_DATABASE_ON_STARTUP=true:
+       a. Inspects existing tables.
+       b. If no tables exist: alembic.command.stamp(head) — marks all migrations
+          as applied without running them (fresh install).
+       c. If tables exist: alembic.command.upgrade(head) — runs pending migrations.
+    4. Disposes sync engine.
+  - Error handling: logs and continues on migration failure (app still starts).
+
+--------------------------------------------------------------------------------
+(d) FILE-SYSTEM STORAGE LAYOUT
+--------------------------------------------------------------------------------
+
+APP_DATA_DIRECTORY (env: APP_DATA_DIRECTORY, required)
+  Root for all user-generated assets. Created on startup if missing.
+
+  <APP_DATA_DIRECTORY>/
+    fastapi.db                          — SQLite database (default DB)
+    userConfig.json                     — User configuration (LLM keys, models, etc.)
+    userConfig.json.bak                 — Atomic backup
+    userConfig.json.lock                 — Cross-process advisory lock
+    images/                             — AI-generated and user-uploaded images
+      {uuid}.png                        — Image files (UUID-named)
+    exports/                            — Exported PPTX/PDF files
+      {title}.pptx                      — Sanitized filename
+      {title}.pdf
+    uploads/                            — Staged uploaded files
+    fonts/                              — Uploaded font files
+      {normalized_family_name}.ttf      — Font files
+    templates/                          — Default template assets
+      {template_id}/
+        static/                         — Template static assets (images, etc.)
+    pptx-to-html/                       — PPTX-to-HTML conversion artifacts
+    pptx-to-json/                       — PPTX-to-JSON conversion artifacts
+    fastembed_cache/                    — Icon vectorstore cache
+      (AllMiniLML6V2 model files)
+    preview_slide/                      — Template generation preview artifacts
+      {slide_index}/
+        {n}.json                        — Preview layout JSON
+        {n}.png                         — Preview rendered image
+
+TEMP_DIRECTORY (env: TEMP_DIRECTORY)
+  Sandbox for uploaded files and intermediate processing.
+  All paths validated via realpath containment checks.
+  Cleanup: constructor wipes base dir on init.
+
+Static resources (bundled, read-only):
+  servers/fastapi/static/
+    icons/
+      bold/                             — Phosphor bold weight icons
+        {icon_name}.svg
+      regular/, thin/, light/, duotone/, fill/
+      placeholder.svg                   — Fallback for missing icons
+    images/
+      replaceable_template_image.png     — Placeholder for template images
+    icons.json                          — Icon metadata (name + tags for vector search)
+
+Bundled templates (top-level, copied to APP_DATA_DIRECTORY on startup):
+  templates/
+    momentum/                           — Preferred default
+      template.json                     — {id, name, description, layouts,
+                                           components, merged_components, fonts,
+                                           thumbnail}
+      static/                           — Template-specific static assets
+    dynamic/, executive/, general/, modern/, standard/, swift/
+  Ordered by preference in constants/presentation.py:DEFAULT_TEMPLATES.
+
+--------------------------------------------------------------------------------
+(e) CACHING MECHANISMS
+--------------------------------------------------------------------------------
+
+1. fastembed Vectorstore (icon search)
+   - Model: AllMiniLML6V2 (ONNX embeddings, ~90MB)
+   - Cache location: {APP_DATA_DIRECTORY}/fastembed_cache/ or
+     PRESENTON_FASTEMBED_ICON_CACHE_DIR
+   - Lazy initialization: loads or creates vectorstore on first search
+   - Bundled vectorstore (read-only) preferred; writable copy created if needed
+   - Embeds all "bold" weight icons from static/icons.json on first init
+
+2. mem0 OSS Memory (semantic context store)
+   - Location: MEM0_DIR (default under APP_DATA_DIRECTORY)
+   - Qdrant path: MEM0_QDRANT_PATH — on-disk vector DB
+   - History DB: MEM0_HISTORY_DB_PATH — SQLite history
+   - Embedder: fastembed/BAAI/bge-small-en-v1.5
+   - LLM: default Ollama llama3.1 (for entity extraction)
+   - Requires spaCy model (en_core_web_sm) for NLP
+   - Two scopes:
+     - Deck-level: "{namespace}:{presentation_id}"
+     - Chat thread: "{namespace}:{presentation_id}:conversation:{conversation_id}"
+   - Configurable: MEM0_ENABLED, MEM0_TOP_K (default 8),
+     MEM0_MAX_CONTEXT_CHARS
+   - Graceful degradation: disables itself on SystemExit from mem0 operations
+
+3. Key-Value Store (KeyValueSqlModel)
+   - Generic JSON blob storage in SQL
+   - Used for: "presentation_custom_themes" (theme catalog)
+   - Ad-hoc state storage
+
+4. Ollama Library Catalog (in-memory)
+   - GET /api/v1/ppt/ollama/models/library returns cached static catalog
+   - No persistence — read from constants/supported_ollama_models.py
+
+--------------------------------------------------------------------------------
+(f) DATA VALIDATION AT THE STORAGE LAYER
+--------------------------------------------------------------------------------
+
+1. Pydantic Model Validation (models/*.py)
+   - All request bodies validated by FastAPI + Pydantic.
+   - Field constraints: min/max length, type coercion, enum validation.
+   - Examples:
+     - ChatMessageRequest.message: 1..8000 chars
+     - ChatAttachment: max 8 attachments per message
+     - SlideOutlineModel.content: validated by normalize_outline_content
+       (max MAX_OUTLINE_CONTENT_WORDS = 100 words)
+     - PresentationOutlineModel.slides: max_length = MAX_NUMBER_OF_SLIDES (50)
+
+2. SQLModel Field Constraints
+   - chat_history_messages.position: ge=1 (must be >= 1)
+   - PresentationModel.version: SAEnum with create_constraint=True
+   - UUID primary keys: uuid.uuid4 default factory
+
+3. JSON Schema Validation (utils/schema_utils.py)
+   - jsonschema Draft202012Validator used in chat memory_layer for
+     slide content validation.
+   - get_schema_validation_errors() — validates LLM-generated content against
+     the layout's JSON schema.
+   - prepare_schema_for_validation() — strips unsupported formats, resolves
+     $ref, ensures array schemas have items.
+   - ensure_strict_json_schema() — OpenAI strict mode compliance.
+
+4. File Upload Validation (utils/validators.py)
+   - validate_files(): checks each UploadFile's size (max_size in MB) and
+     content-type or extension against accepted_types.
+   - Raises HTTPException(400) on violation.
+   - Image uploads: PIL Image.verify() called to validate image integrity.
+
+5. TempFileService Path Validation (services/temp_file_service.py)
+   - All file operations confined to TEMP_DIRECTORY via realpath containment:
+     _is_within_base_dir / _assert_within_base_dir.
+   - sanitize_upload_filename: strips directory components, rejects "." and "..".
+   - resolve_temp_path: resolves realpath, asserts containment.
+   - Raises HTTP 400/404 on violations.
+
+6. User Config Store Validation (utils/user_config_store.py)
+   - Atomic writes: temp file + rename (os.replace) to prevent corruption.
+   - Cross-process lock: O_CREAT|O_EXCL lock file (userConfig.json.lock).
+   - JSON validation on read: malformed config file returns empty dict.
+   - Backup: userConfig.json.bak maintained on every write.
+
+7. Outline Normalization (utils/outline_limits.py)
+   - normalize_outline_payload(): enforces slide count limits, trims content
+     to MAX_OUTLINE_CONTENT_WORDS, ensures outline structure consistency.
+
+8. Database Migrations Validation
+   - compare_type=True in Alembic env ensures column type changes are detected.
+   - Migration 3f2a1b4c5d6e includes SQLite UUID string normalization.
+   - Migration stamping (not running) for fresh installs prevents migration
+     errors on empty databases.
+
+================================================================================
+END OF DOMAIN 3 ANALYSIS
+================================================================================

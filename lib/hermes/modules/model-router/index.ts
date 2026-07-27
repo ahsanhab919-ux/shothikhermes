@@ -44,12 +44,17 @@ export const ModelRouteCostPolicySchema = z.enum([
 export const ModelRouteDomainSchema = z.enum([
   "chat",
   "documents",
+  "notes",
   "slides",
   "sheets",
   "research",
   "writing",
   "books",
+  "ai-detector",
+  "plagiarism",
+  "publish",
 ]);
+
 
 export const ModelRouteRequestSchema = z.object({
   capabilityId: z.string().min(1),
@@ -89,7 +94,8 @@ export type ModelRouteLatencyTarget = z.infer<
 >;
 export type ModelRouteCostPolicy = z.infer<typeof ModelRouteCostPolicySchema>;
 export type ModelRouteDomain = z.infer<typeof ModelRouteDomainSchema>;
-export type ResolveModelRouteInput = z.infer<typeof ModelRouteRequestSchema>;
+export type ResolveModelRouteInput = z.input<typeof ModelRouteRequestSchema>;
+
 export type ModelRoute = z.infer<typeof ModelRouteSchema>;
 
 function isSupportedProvider(value: string): value is SupportedModelProvider {

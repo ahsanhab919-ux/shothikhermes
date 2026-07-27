@@ -1,0 +1,557 @@
+================================================================================
+DOMAIN 5: REUSABILITY ASSESSMENT — PRESENTON BACKEND FOR SHOTHIK/HERMES
+================================================================================
+Separating directly reusable backend code/assets from concepts that should
+only inspire our custom Hermes implementation.
+
+Context:
+  - Shothik has a Next.js frontend (keep unchanged).
+  - Hermes is the backend orchestrator.
+  - Workspace: C:\Users\USER\hermes\shothik-web-mirror-v2
+  - Shothik uses InsForge (Postgres-based BaaS) for DB/auth/storage.
+  - Presenton license: Apache 2.0 (compatible with reuse).
+
+================================================================================
+LICENSE ANALYSIS
+================================================================================
+
+Presenton is licensed Apache 2.0 (LICENSE at repo root, pyproject.toml).
+Key runtime dependencies and their license compatibility:
+- fastapi: MIT
+- sqlmodel: MIT
+- alembic: MIT
+- python-pptx: MIT (BSD)
+- openai: MIT
+- google-genai: Apache 2.0
+- mem0ai: Apache 2.0
+- fastembed: Apache 2.0
+- llmai: (proprietary wrapper around OpenAI SDK, unlicensed in pyproject)
+- dirtyjson: MIT
+- jsonschema: MIT
+- fonttools: MIT
+- pillow: HPND (MIT-like)
+- pdfplumber: MIT
+
+All dependencies are Apache 2.0 / MIT compatible. No GPL/AGPL contamination.
+The llmai library is a concern — it is an unlisted dependency wrapping
+multiple LLM provider SDKs. Hermes should replace llmai with its own provider
+abstraction.
+
+================================================================================
+TIER 1: DIRECTLY REUSABLE BACKEND CODE
+================================================================================
+
+These modules can be lifted with minimal changes (strip presenton-specific
+wiring, adjust imports). Each lists the specific files and required changes.
+
+--------------------------------------------------------------------------------
+1.1 JSON Schema Utilities (utils/schema_utils.py)
+--------------------------------------------------------------------------------
+Files:
+  - servers/fastapi/utils/schema_utils.py
+Functions: ensure_strict_json_schema (OpenAI strict mode compliance),
+  resolve_ref, ensure_array_schemas_have_items, prepare_schema_for_validation,
+  get_schema_validation_errors.
+Dependencies: jsonschema + openai (for NOT_GIVEN sentinel only).
+Changes needed: Replace openai.NOT_GIVEN with a local sentinel. Otherwise
+  lift as-is. Provider-agnostic schema preparation helpers.
+Reusability: HIGH — directly useful for any structured LLM output pipeline.
+
+--------------------------------------------------------------------------------
+1.2 Outline Utilities (utils/outline_utils.py)
+--------------------------------------------------------------------------------
+Files:
+  - servers/fastapi/utils/outline_utils.py
+Functions: get_no_of_outlines_to_generate_for_n_slides,
+  get_no_of_toc_required_for_n_outlines, get_presentation_outline_model_with_toc,
+  get_presentation_title_from_presentation_outline,
+  get_images_for_slides_from_outline, _split_outlines_evenly.
+Dependencies: models.presentation_outline_model only.
+Changes needed: Adjust model imports. Pure math/logic — no external deps.
+Reusability: HIGH — outline mathematics are domain-specific but
+  self-contained.
+
+--------------------------------------------------------------------------------
+1.3 Dictionary Utilities (utils/dict_utils.py)
+--------------------------------------------------------------------------------
+Files:
+  - servers/fastapi/utils/dict_utils.py
+Functions: get_dict_paths_with_key, get_dict_at_path, set_dict_at_path,
+  has_more_than_n_keys.
+Dependencies: None (stdlib).
+Reusability: HIGH — generic JSON path traversal for nested dict manipulation.
+
+--------------------------------------------------------------------------------
+1.4 Theme Color Generation (utils/theme_utils.py + models/theme_data.py)
+--------------------------------------------------------------------------------
+Files:
+  - servers/fastapi/utils/theme_utils.py
+  - servers/fastapi/models/theme_data.py
+Functions: generate_color_palette, _get_color_for_all_lightness_values,
+  OKLCH <-> sRGB conversion.
+Dependencies: Pure Python math (no external deps for color generation).
+Changes needed: None for the color generation logic.
+Reusability: HIGH — OKLCH-based palette generation with WCAG contrast
+  guarantees is directly reusable.
+
+--------------------------------------------------------------------------------
+1.5 Office Document Text Extraction (services/office_document_service.py)
+--------------------------------------------------------------------------------
+Files:
+  - servers/fastapi/services/office_document_service.py
+Dependencies: zipfile, xml.etree.ElementTree (stdlib only).
+Changes needed: None — zero external dependencies.
+Reusability: HIGH — pure-Python OOXML/ODF text extraction.
+
+--------------------------------------------------------------------------------
+1.6 Font Utilities (templates/font_utils.py, templates/pptx_font_utils.py)
+--------------------------------------------------------------------------------
+Files:
+  - servers/fastapi/templates/font_utils.py
+  - servers/fastapi/templates/pptx_font_utils.py
+Functions: Font name extraction (fontTools), PPTX XML font replacement
+  (zipfile + ElementTree), embedded font extraction, fontconfig alias generation.
+Dependencies: fonttools (already a reasonable dependency).
+Changes needed: None for the extraction logic.
+Reusability: MEDIUM-HIGH — PPTX font manipulation is self-contained but
+  only relevant if we support PPTX import.
+
+--------------------------------------------------------------------------------
+1.7 Icon Weight Normalization (utils/icon_weights.py)
+--------------------------------------------------------------------------------
+Files:
+  - servers/fastapi/utils/icon_weights.py
+Dependencies: None (constants + mapping logic).
+Reusability: HIGH — icon weight mapping for Phosphor icon set.
+
+--------------------------------------------------------------------------------
+1.8 Temp File Service (services/temp_file_service.py)
+--------------------------------------------------------------------------------
+Files:
+  - servers/fastapi/services/temp_file_service.py
+Dependencies: utils.get_env only.
+Changes needed: Adjust env var names for Hermes conventions.
+Reusability: HIGH — security-focused sandboxed temp file management with
+  realpath containment.
+
+--------------------------------------------------------------------------------
+1.9 SSE Response Models (models/sse_response.py + utils/sse.py)
+--------------------------------------------------------------------------------
+Files:
+  - servers/fastapi/models/sse_response.py
+  - servers/fastapi/utils/sse.py
+Changes needed: None — generic SSE event formatting and safe stream wrapping.
+Reusability: HIGH — safe_sse_stream pattern is directly reusable.
+
+--------------------------------------------------------------------------------
+1.10 Filename Utilities (utils/filename_utils.py)
+--------------------------------------------------------------------------------
+Files:
+  - servers/fastapi/utils/filename_utils.py
+Dependencies: pathvalidate.
+Reusability: HIGH — safe filename sanitization for exports.
+
+================================================================================
+TIER 2: ADAPTABLE — VALUABLE CONCEPTS NEEDING SIGNIFICANT REWORK
+================================================================================
+
+These modules have valuable architecture but require rework for Hermes.
+Each describes what to keep and what to rewrite.
+
+--------------------------------------------------------------------------------
+2.1 LLM Provider Abstraction (llm_config.py + llm_provider.py + constants/llm.py)
+--------------------------------------------------------------------------------
+Files:
+  - servers/fastapi/utils/llm_config.py (400+ lines)
+  - servers/fastapi/utils/llm_provider.py (200+ lines)
+  - servers/fastapi/constants/llm.py
+Assessment:
+  The pattern of a single get_llm_config() -> ClientConfig + get_model() ->
+  model_name is sound. The 16-provider support is comprehensive.
+  HOWEVER: the implementation depends on llmai (an external wrapper library).
+  This is a hard dependency that Hermes should NOT adopt.
+What to keep:
+  - The LLMProvider enum (16 providers)
+  - The ClientConfig pattern (one config class per provider)
+  - The env-based configuration approach
+  - The provider detection predicates
+What to rewrite:
+  - Replace llmai with direct provider SDK calls (openai, anthropic, google-genai)
+  - OR: use Hermes' existing provider routing (Hermes already supports
+    OpenRouter, Anthropic, OpenAI, etc.)
+  - Strip Codex OAuth flow (ChatGPT-specific, not needed for Hermes)
+  - Strip ChatGPTClientConfig (presenton-specific)
+Effort: HIGH — every LLM call site changes when the underlying library changes.
+
+--------------------------------------------------------------------------------
+2.2 LLM Utils — Streaming + Structured Generation (utils/llm_utils.py)
+--------------------------------------------------------------------------------
+Files:
+  - servers/fastapi/utils/llm_utils.py (345 lines)
+Assessment:
+  Core utilities: get_generate_kwargs (builds kwargs from messages/tools),
+  stream_generate_events (thread-safe async generator bridging sync client
+  to async), generate_structured_with_schema_retries (two-loop retry: parse
+  retries + JSON schema validation feedback loops).
+What to keep:
+  - generate_structured_with_schema_retries — the schema feedback loop pattern
+  - structured_validation_feedback_user_message — error feedback to LLM
+  - The dirtyjson fallback parsing approach
+  - Client disconnect detection pattern
+What to rewrite:
+  - stream_generate_events depends on llmai's streaming API -> replace with
+    direct OpenAI/Anthropic streaming
+  - get_generate_kwargs -> simplify for direct provider SDKs
+  - extract_structured_content -> adjust for provider-specific response formats
+Effort: MEDIUM — the retry/validation logic is reusable; the streaming
+  bridge needs rewriting.
+
+--------------------------------------------------------------------------------
+2.3 Presentation Generation Pipeline (utils/llm_calls/*)
+--------------------------------------------------------------------------------
+Files:
+  - servers/fastapi/utils/llm_calls/generate_presentation_outlines.py
+  - servers/fastapi/utils/llm_calls/generate_presentation_structure.py
+  - servers/fastapi/utils/llm_calls/generate_slide_content.py
+  - servers/fastapi/utils/llm_calls/edit_slide.py
+  - servers/fastapi/utils/llm_calls/edit_slide_html.py
+  - servers/fastapi/utils/llm_calls/select_slide_type_on_edit.py
+  - servers/fastapi/utils/llm_calls/generate_web_search_query.py
+Assessment:
+  The 4-phase pipeline (outline -> structure -> slide content -> assets) is
+  the core architectural pattern. The prompt engineering is sophisticated.
+What to keep:
+  - The 4-phase pipeline architecture
+  - The system prompts (highly tuned for presentation generation)
+  - The dynamic Pydantic model generation for exact slide counts
+  - The schema preparation pattern (remove asset fields, add speaker note)
+  - The web search routing logic
+What to rewrite:
+  - All llmai imports -> direct provider SDK or Hermes routing
+  - The message types (SystemMessage, UserMessage -> provider-native)
+  - The response_format handling (provider-specific)
+Effort: MEDIUM — prompts are reusable as-is, plumbing needs rewriting.
+
+--------------------------------------------------------------------------------
+2.4 Template V2 Schema System (templates/v2/)
+--------------------------------------------------------------------------------
+Files:
+  - servers/fastapi/templates/v2/models/elements.py (11 element types)
+  - servers/fastapi/templates/v2/models/layouts.py (layout hierarchy)
+  - servers/fastapi/templates/v2/schema.py (JSON Schema generation)
+  - servers/fastapi/templates/v2/generation.py (LLM-based template generation)
+  - servers/fastapi/templates/v2/tools.py (PreviewSlideTool)
+Assessment:
+  The component-based element model (text, image, chart, table, vector,
+  infographic, flex, grid, container, group) is comprehensive and well-designed.
+  The JSON Schema generation from visual layouts is the key innovation.
+What to keep:
+  - The 11 element type definitions (discriminated union)
+  - The RawSlideLayout -> Component -> SlideLayout hierarchy
+  - The schema generation logic (decorative vs editable elements)
+  - The chart/table element models with min/max constraints
+  - The merge_similar_components clustering algorithm
+What to rewrite:
+  - The LLM-based template generation (generate_template) needs Hermes LLM routing
+  - The PreviewSlideTool depends on the Node.js export runtime
+  - The template import from PPTX depends on the Node.js export runtime
+Effort: MEDIUM — element models are directly reusable; generation pipeline
+  needs LLM routing changes.
+
+--------------------------------------------------------------------------------
+2.5 Image Generation Service (services/image_generation_service.py)
+--------------------------------------------------------------------------------
+Files:
+  - servers/fastapi/services/image_generation_service.py (500+ lines)
+Assessment:
+  9-provider facade with stock photo search (Pexels/Pixabay) and AI generation
+  (DALL-E 3, Gemini, ComfyUI, etc.). Parallel/sequential mode toggle.
+What to keep:
+  - The provider-agnostic ImagePrompt model
+  - The provider selection logic
+  - The ComfyUI workflow injection pattern
+  - The ImageAsset persistence pattern
+What to rewrite:
+  - The aiohttp calls for Pexels/Pixabay -> can stay if we want stock photos
+  - The OpenAI/Google SDK calls -> align with Hermes provider routing
+  - The per-event-loop lock -> may need adjustment for Hermes concurrency model
+Effort: MEDIUM — provider selection is sound; SDK calls need alignment.
+
+--------------------------------------------------------------------------------
+2.6 Icon Finder Service (services/icon_finder_service.py)
+--------------------------------------------------------------------------------
+Files:
+  - servers/fastapi/services/icon_finder_service.py
+Assessment:
+  Local Phosphor icon set with fastembed vector search. No external API.
+  Lazy initialization. Weight normalization.
+What to keep:
+  - The fastembed vector search approach
+  - The bundled icons.json metadata format
+  - The weight normalization logic
+What to rewrite:
+  - The vectorstore cache path resolution
+  - The URL normalization (presenton-specific /static/ paths)
+Effort: LOW-MEDIUM — mostly path/config changes.
+
+--------------------------------------------------------------------------------
+2.7 Database Layer (services/database.py + utils/db_utils.py)
+--------------------------------------------------------------------------------
+Files:
+  - servers/fastapi/services/database.py
+  - servers/fastapi/utils/db_utils.py
+Assessment:
+  Async SQLAlchemy engine with SQLite/Postgres/MySQL support.
+  NOTE: Shothik uses InsForge (Postgres-based BaaS). The SQLAlchemy +
+  SQLModel + Alembic stack may be redundant if InsForge provides DB access.
+What to keep:
+  - The async engine pattern
+  - The multi-database URL resolution
+  - The pool configuration logic
+  - The migration stamping strategy for fresh installs
+What to rewrite:
+  - If using InsForge: replace with InsForge SDK database access
+  - The table list in create_db_and_tables is presenton-specific
+  - The Alembic migrations would need to be re-created for Hermes tables
+Effort: HIGH if integrating with InsForge; LOW if keeping SQLAlchemy.
+
+--------------------------------------------------------------------------------
+2.8 Chat Tool System (services/chat/tools.py + schemas.py + prompts.py)
+--------------------------------------------------------------------------------
+Files:
+  - servers/fastapi/services/chat/tools.py (1682 lines)
+  - servers/fastapi/services/chat/schemas.py
+  - servers/fastapi/services/chat/prompts.py
+  - servers/fastapi/services/chat/slide_ui_helpers.py (2205 lines)
+Assessment:
+  23 tools for presentation manipulation via LLM tool-calling. Comprehensive
+  system prompt. Element/component CRUD. Asset generation. Theme management.
+What to keep:
+  - The tool-calling architecture (tool definitions + handlers + execution loop)
+  - The 23 tool schemas (addOutline, updateSlide, addElement, etc.)
+  - The CHAT_AI_ASSISTANT_SYSTEM_PROMPT
+  - The element normalization helpers (slide_ui_helpers.py)
+  - The argument repair logic (normalizes JSON string fields)
+What to rewrite:
+  - The PresentationContextStore (memory_layer.py) — rewrite against Hermes
+    session/run/artifact model instead of presenton's SQL + mem0 hybrid
+  - The llmai Tool/LLMTool types -> provider-native tool definitions
+  - The conversation store -> map to Hermes session model
+Effort: MEDIUM-HIGH — tools and prompts are reusable; the state layer
+  needs Hermes-ification.
+
+--------------------------------------------------------------------------------
+2.9 Export Pipeline (services/export_task_service.py + utils/export_utils.py)
+--------------------------------------------------------------------------------
+Files:
+  - servers/fastapi/services/export_task_service.py (400+ lines)
+  - servers/fastapi/utils/export_utils.py
+Assessment:
+  Node.js + Puppeteer-based rendering. JSON file-based IPC. 300s timeout.
+  The export flow requires a running Next.js frontend at a known URL.
+What to keep:
+  - The JSON file-based IPC pattern
+  - The _localize_json_image_assets (base64 embedding for headless rendering)
+  - The 7 task types (export, pptx-to-html, pptx-to-json, html-to-image, etc.)
+  - The PyInstaller-compiled convert binary approach
+What to rewrite:
+  - The Next.js URL construction -> point to Shothik frontend
+  - The auth header injection -> use Hermes session model
+  - The asset path resolution -> align with Hermes/InsForge storage
+  - The Chromium executable detection
+Effort: MEDIUM — IPC pattern is reusable; URL/auth wiring needs adjustment.
+
+--------------------------------------------------------------------------------
+2.10 Webhook System (services/webhook_service.py + models/sql/webhook_subscription.py)
+--------------------------------------------------------------------------------
+Files:
+  - servers/fastapi/services/webhook_service.py
+  - servers/fastapi/models/sql/webhook_subscription.py
+  - servers/fastapi/api/v1/webhook/router.py
+Assessment:
+  Simple but functional webhook subscription + delivery system.
+What to keep:
+  - The subscription model (URL + secret + event)
+  - The concurrent delivery with asyncio.gather
+  - The Bearer auth for webhook calls
+What to rewrite:
+  - The SQL model -> InsForge table or Hermes event system
+  - The event types -> expand for Hermes session/run events
+Effort: LOW.
+
+--------------------------------------------------------------------------------
+2.11 Auth System (utils/simple_auth.py)
+--------------------------------------------------------------------------------
+Files:
+  - servers/fastapi/utils/simple_auth.py
+  - servers/fastapi/api/v1/auth/router.py
+  - servers/fastapi/api/middlewares.py (SessionAuthMiddleware)
+Assessment:
+  Single-user PBKDF2 auth with signed session tokens. 200K iterations.
+  30-day TTL. Cookie + Bearer + Basic auth support.
+What to keep:
+  - The PBKDF2 password hashing approach
+  - The HMAC-signed token format
+  - The middleware pattern
+What to rewrite:
+  - Shothik uses InsForge for auth — this entire system may be redundant
+  - If keeping: replace single-user with multi-user
+  - The userConfig.json-based credential storage -> InsForge auth
+Effort: HIGH if replacing with InsForge auth; LOW if keeping as-is.
+
+================================================================================
+TIER 3: INSPIRATION ONLY — CUSTOM HERMES IMPLEMENTATION
+================================================================================
+
+These patterns are worth following but the implementation should be custom.
+
+--------------------------------------------------------------------------------
+3.1 MCP Server (mcp_server.py)
+--------------------------------------------------------------------------------
+Pattern: Expose curated API subset as MCP tools via FastMCP.from_openapi().
+  Token-based auth. Route mapping to filter exposed endpoints.
+Why inspire: Hermes should expose its own session/run/artifact APIs as MCP
+  tools, not presenton's presentation endpoints. But the pattern of loading
+  an OpenAPI spec and filtering with RouteMap is worth following.
+Hermes implementation: Use Hermes' own OpenAPI spec + FastMCP to expose
+  session creation, run execution, artifact retrieval as MCP tools.
+
+--------------------------------------------------------------------------------
+3.2 mem0 OSS Memory (services/mem0_oss_memory.py + mem0_presentation_memory_service.py)
+--------------------------------------------------------------------------------
+Pattern: Semantic memory using mem0 (Qdrant + fastembed + spaCy). Scoped by
+  presentation_id and conversation_id. Graceful degradation.
+Why inspire: The concept of scoped semantic memory for presentations is
+  valuable, but mem0 adds heavy dependencies (Qdrant, spaCy, ONNX models).
+  Hermes should implement semantic memory using its own infrastructure.
+Hermes implementation: Use Hermes' existing memory system or InsForge's
+  vector search capabilities. Implement scoped retrieval by session_id
+  and run_id instead of presentation_id.
+
+--------------------------------------------------------------------------------
+3.3 Document Ingestion Pipeline (LiteParse + DocumentsLoader)
+--------------------------------------------------------------------------------
+Pattern: Multi-format document ingestion with OCR. Node.js subprocess for
+  high-quality parsing. Dispatch by extension.
+Why inspire: The dispatch pattern and format coverage is excellent, but
+  the Node.js LiteParse dependency is heavy. Hermes should use Python-native
+  parsers where possible.
+Hermes implementation:
+  - PDF: pymupdf or pdfplumber (already available)
+  - Office: office_document_service.py (Tier 1 — directly reusable)
+  - Images: Pillow + pytesseract or Hermes OCR tools
+  - Avoid the Node.js LiteParse dependency entirely
+
+--------------------------------------------------------------------------------
+3.4 Presentation Data Model (models/sql/presentation.py + models/sql/slide.py)
+--------------------------------------------------------------------------------
+Pattern: Presentation -> Slides with content (JSON) + ui (hydrated components).
+  Version field for v1/v2 template systems. Outlines, structure, layout stored
+  as JSON columns.
+Why inspire: The data model is presenton-specific. Hermes should model this
+  as Session -> Runs -> Artifacts, where each artifact is a slide deck.
+Hermes implementation:
+  - Session (replaces Presentation) -> has Runs (generation attempts)
+  - Run -> produces Artifacts (slides, exports, images)
+  - Use InsForge tables: sessions, runs, artifacts, slides
+  - Store slide content as JSONB in Postgres (InsForge)
+
+--------------------------------------------------------------------------------
+3.5 Concurrent Service (services/concurrent_service.py)
+--------------------------------------------------------------------------------
+Pattern: Simple asyncio task tracking with done callbacks.
+Why inspire: Too simple for production. Hermes should use a proper task queue
+  (Celery, RQ, or InsForge Edge Functions) for background generation.
+Hermes implementation: Use InsForge Edge Functions or Hermes background
+  tasks for async presentation generation.
+
+--------------------------------------------------------------------------------
+3.6 User Config System (utils/user_config.py + utils/user_config_store.py)
+--------------------------------------------------------------------------------
+Pattern: Flat JSON file (userConfig.json) with all provider keys. Atomic writes
+  with backup + lock. Env var mirroring.
+Why inspire: Single-user, single-file config. Hermes should use InsForge
+  secrets management or a proper config service.
+Hermes implementation: Use InsForge secrets for API keys. Use InsForge
+  database for user preferences. No flat-file config.
+
+--------------------------------------------------------------------------------
+3.7 PPTX Font Replacement (templates/pptx_font_utils.py)
+--------------------------------------------------------------------------------
+Pattern: Direct PPTX XML manipulation via zipfile + ElementTree. Theme font
+  resolution (+mn-lt, +mj-lt). Embedded EOT extraction. Fontconfig aliases.
+Why inspire: The XML manipulation approach is clever but tightly coupled to
+  the PPTX format. If Hermes supports PPTX import, this is the reference.
+  If not, skip entirely.
+Hermes implementation: Only if PPTX import is required. Otherwise, use
+  the bundled convert binary's font handling.
+
+================================================================================
+SUMMARY MATRIX
+================================================================================
+
+Component                    | Tier    | Effort  | Key Constraint
+-----------------------------|---------|---------|--------------------------------
+schema_utils.py              | 1       | LOW     | Replace openai.NOT_GIVEN
+outline_utils.py             | 1       | LOW     | Adjust model imports
+dict_utils.py                | 1       | LOW     | None
+theme_utils.py               | 1       | LOW     | None
+office_document_service.py   | 1       | LOW     | None
+font_utils.py                | 1       | LOW     | fonttools dependency
+icon_weights.py              | 1       | LOW     | None
+temp_file_service.py         | 1       | LOW     | Env var names
+sse_response.py + sse.py     | 1       | LOW     | None
+filename_utils.py             | 1       | LOW     | pathvalidate
+llm_config.py                | 2       | HIGH    | Replace llmai
+llm_utils.py                 | 2       | MEDIUM  | Replace llmai streaming
+llm_calls/* (6 files)        | 2       | MEDIUM  | Replace llmai, keep prompts
+templates/v2/*               | 2       | MEDIUM  | Element models reusable
+image_generation_service.py  | 2       | MEDIUM  | Align with Hermes providers
+icon_finder_service.py       | 2       | LOW-MED | Path/config changes
+database.py                  | 2       | HIGH    | InsForge integration
+chat/tools.py + prompts.py   | 2       | MED-HIGH| Hermes session model
+export_task_service.py        | 2       | MEDIUM  | Point to Shothik frontend
+webhook_service.py           | 2       | LOW     | InsForge table
+simple_auth.py               | 2       | HIGH    | InsForge auth replaces
+mcp_server.py                | 3       | CUSTOM  | Hermes MCP tools
+mem0 memory system           | 3       | CUSTOM  | Hermes/InsForge vector search
+LiteParse document ingestion  | 3       | CUSTOM  | Python-native parsers
+Presentation data model       | 3       | CUSTOM  | Session/Run/Artifact model
+concurrent_service.py        | 3       | CUSTOM  | InsForge Edge Functions
+user_config system           | 3       | CUSTOM  | InsForge secrets
+PPTX font replacement        | 3       | CUSTOM  | Only if PPTX import needed
+
+================================================================================
+RECOMMENDED HERMES IMPLEMENTATION PRIORITY
+================================================================================
+
+Phase 1 (Foundation — Tier 1 lifts):
+  - schema_utils.py (structured output validation)
+  - outline_utils.py (presentation outline math)
+  - dict_utils.py (JSON path traversal)
+  - theme_utils.py (OKLCH color generation)
+  - office_document_service.py (document text extraction)
+  - temp_file_service.py (sandboxed file management)
+  - sse_response.py + sse.py (SSE streaming)
+  - filename_utils.py (safe filenames)
+
+Phase 2 (Core Pipeline — Tier 2 adaptations):
+  - LLM provider abstraction (replace llmai with Hermes routing)
+  - 4-phase generation pipeline (outlines -> structure -> content -> assets)
+  - Template v2 element models + schema generation
+  - Image generation service (provider-aligned)
+  - Icon finder service
+  - Export pipeline (point to Shothik frontend)
+  - Chat tool system (mapped to Hermes sessions)
+
+Phase 3 (Integration — Tier 3 custom):
+  - Session/Run/Artifact data model (InsForge tables)
+  - InsForge auth integration
+  - Hermes MCP tools
+  - Semantic memory (InsForge vector search)
+  - Background task execution (InsForge Edge Functions)
+  - User config/secrets (InsForge)
+
+================================================================================
+END OF DOMAIN 5 ANALYSIS
+================================================================================

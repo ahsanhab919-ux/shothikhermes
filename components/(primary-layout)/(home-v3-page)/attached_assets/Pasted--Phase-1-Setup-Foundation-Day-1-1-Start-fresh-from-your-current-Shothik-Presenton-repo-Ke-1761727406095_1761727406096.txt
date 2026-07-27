@@ -1,0 +1,69 @@
+🧭 Phase 1 — Setup & Foundation (Day 1)
+1. Start fresh from your current Shothik Presenton repo
+* Keep the backend and theme system as-is (already stable from the markdown doc you uploaded).
+* Create a new branch:    git checkout -b rewrite/ui-chat-preview
+*   
+* Confirm /deck → /deck/[id] routing works and theme saves correctly.
+2. Install all updated dependencies
+In /servers/nextjs:
+
+npm i tailwindcss postcss autoprefixer class-variance-authority tailwind-merge framer-motion lucide-react clsx html-to-image react-hot-toast
+In /servers/fastapi:
+
+pip install fastapi[all] SQLAlchemy asyncpg alembic python-dotenv pydantic websockets aiosqlite
+3. Update .env
+* Add:    NEXT_PUBLIC_WEBSOCKET_URL=ws://localhost:8000
+* DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/shothik
+*   
+* Add fallback SQLite:    DATABASE_URL=sqlite+aiosqlite:///./local.db
+*   
+
+🎨 Phase 2 — Rewrite UI (Days 2–3)
+4. New layout skeleton
+Inside /components/editor/:
+
+EditorShell.tsx        → main layout
+SlideOutline.tsx       → left sidebar (slides list)
+SlideCanvas.tsx        → center live canvas
+RightTabs.tsx          → right panel (Chat, Style, Assets)
+ChatPanel.tsx          → chat system
+✅ Checklist for EditorShell
+* Top bar: deck title, share button, theme toggle.
+* Grid layout: grid-cols-[220px_1fr_320px] (sidebar, canvas, right panel).
+* Keyboard navigation for slides ↑/↓.
+✅ Chat Panel
+* Stream messages token-by-token via WebSocket.
+* Support /outline, /rewrite slide X, /image.
+✅ Style Tab
+* Integrate your existing ThemePicker.
+* Add preview color palette on active deck.
+✅ Slide Canvas
+* Render slide blocks (text, image, shape).
+* Use html-to-image to render thumbnails in real-time.
+
+⚙️ Phase 3 — Backend Expansion (Days 4–5)
+5. Add tables (Alembic migration)
+
+# slides, slide_blocks, threads, messages
+Each slide → multiple slide_blocks (type text/image/etc.). Each deck → multiple threads, each thread → multiple messages.
+6. Endpoints
+
+GET/POST /slides
+GET/PUT/DELETE /blocks
+POST /threads
+POST /messages
+WS /stream/{thread_id}
+WebSocket stream example:
+
+@app.websocket("/api/v1/ppt/stream/{thread_id}")
+async def chat_stream(ws: WebSocket, thread_id: str):
+    await ws.accept()
+    while True:
+        msg = await ws.receive_text()
+        # generate tokens (placeholder or via AI)
+        for t in ["Processing...", "Outline ready!"]:
+            await ws.send_json({"type": "token", "delta": t})
+        await ws.send_json({"done": True})
+7. Slide preview
+* Client: html-to-image → thumbnails.
+* Optional: POST /export/pdf (use Puppeteer later).

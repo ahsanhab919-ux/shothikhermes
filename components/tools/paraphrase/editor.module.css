@@ -1,0 +1,8 @@
+.content_editable:focus {
+  outline: none;
+  height: '100%';
+}
+.invalid_text {
+  opacity: 0.5;
+  display: inline;
+}

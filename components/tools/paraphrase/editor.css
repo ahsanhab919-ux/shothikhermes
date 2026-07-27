@@ -1,0 +1,152 @@
+/* Remove default margins from the editor container */
+:root {
+  --paraphrase-freeze-bg: #e3f2fd;
+  --paraphrase-freeze-color: #2196f3;
+  --paraphrase-protected-bg: #ffebee;
+  --paraphrase-protected-color: #f44336;
+  --paraphrase-frozen-phrase-bg: #e8f5e8;
+  --paraphrase-frozen-phrase-color: #4caf50;
+  --paraphrase-duplicate-bg: #fff3e0;
+  --paraphrase-duplicate-color: #ff9800;
+  --paraphrase-highlight-yellow-bg: #f9f4e2;
+  --paraphrase-highlight-sentence-bg: #faf5e5;
+  --paraphrase-active-sentence-bg: rgba(33, 150, 243, 0.1);
+}
+
+.dark {
+  --paraphrase-freeze-bg: rgba(56, 113, 193, 0.22);
+  --paraphrase-freeze-color: #9fc3ff;
+  --paraphrase-protected-bg: rgba(244, 67, 54, 0.18);
+  --paraphrase-protected-color: #ff9c8f;
+  --paraphrase-frozen-phrase-bg: rgba(62, 143, 76, 0.22);
+  --paraphrase-frozen-phrase-color: #9de5aa;
+  --paraphrase-duplicate-bg: rgba(255, 152, 0, 0.18);
+  --paraphrase-duplicate-color: #ffc98f;
+  --paraphrase-highlight-yellow-bg: rgba(249, 244, 226, 0.18);
+  --paraphrase-highlight-sentence-bg: rgba(255, 227, 173, 0.18);
+  --paraphrase-active-sentence-bg: rgba(33, 150, 243, 0.22);
+}
+
+.ProseMirror {
+  margin: 0; /* Remove margin from editor */
+  outline: none;
+  min-height: 150px;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+/* Remove margins from all paragraph elements */
+.ProseMirror p {
+  margin: 0;
+  margin-bottom: 1.5em !important;
+  margin-block-start: 0;
+  margin-block-end: 0;
+}
+
+/* Remove margins from headings */
+.ProseMirror h1,
+.ProseMirror h2,
+.ProseMirror h3,
+.ProseMirror h4,
+.ProseMirror h5,
+.ProseMirror h6 {
+  margin: 0;
+  margin-block-start: 0;
+  margin-block-end: 0;
+}
+
+/* Remove margins from lists */
+.ProseMirror ul,
+.ProseMirror ol {
+  margin: 0;
+  margin-block-start: 0;
+  margin-block-end: 0;
+  padding-left: 1.5rem; /* Keep some padding for list indentation */
+}
+
+/* Remove margins from list items */
+.ProseMirror li {
+  margin: 0;
+}
+
+/* Remove margins from blockquotes */
+.ProseMirror blockquote {
+  margin: 0;
+  margin-block-start: 0;
+  margin-block-end: 0;
+  border-left: 2px solid #ccc;
+  padding-left: 1rem;
+}
+
+/* Placeholder style */
+.ProseMirror p.is-empty::before {
+  float: left;
+  height: 0;
+  pointer-events: none;
+  content: attr(data-placeholder);
+  color: #aaa;
+}
+
+/* Style for words that exceed the limit */
+.word-limit-exceeded {
+  opacity: 0.6;
+  color: gray;
+}
+
+/* Existing word styles */
+.frozen-word,
+.frozen-word[data-frozen-phrase="true"] {
+  border-radius: 3px;
+  background-color: var(--paraphrase-freeze-bg);
+  padding: 1px 2px;
+  color: var(--paraphrase-freeze-color);
+  text-decoration: none;
+}
+
+.protected-word {
+  border-radius: 3px;
+  background-color: var(--paraphrase-protected-bg);
+  padding: 1px 2px;
+  color: var(--paraphrase-protected-color);
+  text-decoration: none;
+}
+
+/* New phrase styles */
+.frozen-phrase {
+  border-radius: 3px;
+  background-color: var(--paraphrase-frozen-phrase-bg);
+  padding: 1px 2px;
+  color: var(--paraphrase-frozen-phrase-color);
+  text-decoration: none;
+}
+
+/* editor.css */
+.duplicate-sentence {
+  background-color: var(--paraphrase-duplicate-bg);
+  color: var(--paraphrase-duplicate-color);
+}
+
+.sentence-span.active-sentence {
+  transition: background-color 0.2s ease;
+  background-color: var(--paraphrase-highlight-sentence-bg);
+}
+
+/* New style for yellow highlight */
+.yellow-highlight {
+  background-color: var(
+    --paraphrase-highlight-yellow-bg
+  ); /*Light background color*/
+}
+
+/* For highlighting sentences */
+.highlighted-sentence {
+  transition: background-color 0.2s ease;
+  border-radius: 4px;
+  background-color: var(--paraphrase-highlight-sentence-bg) !important;
+  padding: 2px 0;
+}
+
+.active-sentence {
+  border-radius: 4px;
+  background-color: var(--paraphrase-active-sentence-bg);
+}

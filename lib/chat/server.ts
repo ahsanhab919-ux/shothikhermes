@@ -3,6 +3,7 @@ import { createConvexClientForUser } from "@/lib/convex/user-token";
 import type {
   ChatMessage,
   ChatSurface,
+  ChatSyncSnapshot,
   ConversationContextRef,
   ConversationStatus,
   ConversationSummary,
@@ -256,4 +257,67 @@ export async function deleteMessageForUser(messageId: string, userId: string) {
   return convex.mutation(api.messages.deleteMessage, {
     messageId: messageId as any,
   });
+}
+
+export async function getChatSyncSnapshotForUser(input: {
+  userId: string;
+  since?: number;
+  surface?: ChatSurface;
+  includeTemporary?: boolean;
+  conversationLimit?: number;
+  messageLimit?: number;
+}): Promise<ChatSyncSnapshot> {
+  const since = Math.max(0, input.since ?? 0);
+  const conversations = await listConversationsForUser({
+    userId: input.userId,
+    ...(input.surface ? { surface: input.surface } : {}),
+    includeTemporary: input.includeTemporary ?? true,
+    ...(typeof input.conversationLimit === "number"
+      ? { limit: input.conversationLimit }
+      : {}),
+  });
+
+  const changedConversations = conversations.filter(
+    (conversation) =>
+      conversation.updatedAt > since || conversation.lastMessageAt > since,
+  );
+
+  const conversationRecords = await Promise.all(
+    changedConversations.map(async (conversation) => {
+      const messages = await listMessagesForConversation({
+        conversationId: conversation._id,
+        userId: input.userId,
+        ...(typeof input.messageLimit === "number"
+          ? { limit: input.messageLimit }
+          : {}),
+      });
+
+      return {
+        conversation,
+        messages: messages.filter(
+          (message) => message.updatedAt > since || message.createdAt > since,
+        ),
+      };
+    }),
+  );
+
+  const nextCursor = conversationRecords.reduce((latest, record) => {
+    const latestMessageTs = record.messages.reduce(
+      (messageLatest, message) =>
+        Math.max(messageLatest, message.updatedAt, message.createdAt),
+      0,
+    );
+
+    return Math.max(
+      latest,
+      record.conversation.updatedAt,
+      record.conversation.lastMessageAt,
+      latestMessageTs,
+    );
+  }, since);
+
+  return {
+    cursor: nextCursor,
+    conversations: conversationRecords,
+  };
 }

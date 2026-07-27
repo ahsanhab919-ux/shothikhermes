@@ -3,6 +3,7 @@
 ## Scope
 - Active workflow: `docs/CORE_CHAT_EXECUTION_WORKFLOW.md`
 - Active milestone: `Milestone 1: Chat Reliability Baseline`
+- Active chat improvement plan: `docs/CHAT_PHASED_ADOPTION_BUILD_PLAN.md`
 - Deferred: Google sign-in unless it directly blocks core chat
 
 ## Completed Nodes
@@ -37,6 +38,7 @@
   - The current browser acceptance blocker is not Convex auth; it is session routing/state that sends `/agents/chat` to `/auth/post-login` in the observed browser run.
 
 ## Immediate Next Tasks
+- Complete Phase 1 provider modularization for chat so the orchestrator no longer owns raw provider transport details.
 - Re-run a verified Insforge browser sign-in and confirm `/api/chat/conversations` succeeds with the active session on the repaired public Convex path.
 - Diagnose the current `/agents/chat` client transition (`/agents/chat` -> transient error state -> `/writing-studio`) after auth hydration changes.
 - Execute one real authenticated chat turn and capture Hermes/session evidence.

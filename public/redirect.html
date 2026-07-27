@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Redirecting...</title>
+    <style>
+      body {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        margin: 0;
+        padding: 0;
+        min-height: 100vh;
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu,
+          Cantarell, sans-serif;
+      }
+      .loader {
+        text-align: center;
+      }
+      .spinner {
+        animation: spin 1s linear infinite;
+        margin: 0 auto 20px;
+        border: 3px solid gray;
+        border-top: 3px solid green;
+        border-radius: 50%;
+        width: 40px;
+        height: 40px;
+      }
+      @keyframes spin {
+        0% {
+          transform: rotate(0deg);
+        }
+        100% {
+          transform: rotate(360deg);
+        }
+      }
+      .message {
+        color: gray;
+        font-size: 14px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="loader">
+      <div class="spinner"></div>
+      <div class="message">Redirecting...</div>
+    </div>
+
+    <script>
+      (function () {
+        // Get URL parameters
+        const urlParams = new URLSearchParams(window.location.search);
+
+        // SSLCommerz success indicators: val_id (validation ID) or status=VALID
+        // SSLCommerz failure indicators: error parameter or status=FAILED
+        const hasValId = urlParams.get("val_id");
+        const hasStatus = urlParams.get("status");
+        const hasError = urlParams.get("error");
+        const statusParam = urlParams.get("status");
+
+        // Determine payment status
+        let status = null;
+        if (hasValId || statusParam === "VALID" || statusParam === "success") {
+          status = "success";
+        } else if (
+          hasError ||
+          statusParam === "FAILED" ||
+          statusParam === "failed" ||
+          statusParam === "cancel"
+        ) {
+          status = statusParam === "cancel" ? "cancel" : "failed";
+        } else if (statusParam) {
+          status = statusParam;
+        }
+
+        const packageId = urlParams.get("package_id");
+        const planId = urlParams.get("plan_id");
+        const transactionId =
+          urlParams.get("tran_id") ||
+          urlParams.get("transaction_id") ||
+          urlParams.get("val_id");
+
+        // Determine redirect URL based on status
+        let redirectUrl = "/pricing";
+        const params = new URLSearchParams();
+
+        if (status === "success") {
+          // Payment successful
+          redirectUrl = "/pricing/checkout/success";
+          if (packageId) params.set("package_id", packageId);
+          if (planId) params.set("plan_id", planId);
+          if (transactionId) params.set("transaction_id", transactionId);
+        } else if (status === "cancel" || status === "failed") {
+          // Payment cancelled or failed
+          redirectUrl = "/pricing/checkout/cancel";
+          if (packageId) params.set("package_id", packageId);
+          if (planId) params.set("plan_id", planId);
+        } else {
+          // Default: redirect to pricing page
+          redirectUrl = "/pricing";
+        }
+
+        // Append query parameters if any
+        if (params.toString()) {
+          redirectUrl += "?" + params.toString();
+        }
+
+        // Redirect to the appropriate page
+        window.location.href = redirectUrl;
+      })();
+    </script>
+  </body>
+</html>

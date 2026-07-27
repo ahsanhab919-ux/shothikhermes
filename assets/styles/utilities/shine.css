@@ -1,0 +1,42 @@
+/* Shine animation for title text */
+@layer utilities {
+  .animate-shine {
+    @apply relative overflow-hidden;
+  }
+
+  /* Light mode - multiply blend */
+  .animate-shine::after {
+    position: absolute;
+    top: 0;
+    left: -140%;
+    transform: skewX(-20deg);
+    mix-blend-mode: multiply;
+    animation: shineMove 1.8s linear infinite;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      hsl(var(--foreground) / 0.15) 45%,
+      hsl(var(--foreground) / 0.25) 50%,
+      hsl(var(--foreground) / 0.15) 55%,
+      transparent 100%
+    );
+    width: 140%;
+    height: 100%;
+    pointer-events: none;
+    content: "";
+  }
+
+  /* Dark mode - screen blend */
+  :is(.dark *) .animate-shine::after {
+    mix-blend-mode: screen;
+  }
+
+  @keyframes shineMove {
+    0% {
+      left: -140%;
+    }
+    100% {
+      left: 140%;
+    }
+  }
+}

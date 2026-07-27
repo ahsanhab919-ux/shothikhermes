@@ -1,0 +1,67 @@
+.loading {
+  @apply relative cursor-wait opacity-50;
+}
+
+.loading.loading-center {
+  @apply bg-muted-foreground;
+}
+
+.loading.loading-center::before {
+  @apply bg-muted-foreground absolute inset-0 z-30;
+  content: "";
+}
+
+.loading.loading-center::after {
+  @apply absolute inset-0 z-30 m-auto h-4 w-4 animate-spin rounded-full border-4 border-dashed;
+  content: "";
+}
+
+.loading.loading-left::before,
+.loading.loading-right::after {
+  @apply h-4 w-4 animate-spin rounded-full border-4 border-dashed;
+  content: "";
+}
+
+.dot-flashing {
+  display: inline-block;
+  position: relative;
+  animation: dot-flashing 1s infinite linear alternate;
+  animation-delay: 0.5s;
+  border-radius: 9999px;
+  background-color: hsl(var(--primary));
+  width: 8px;
+  height: 8px;
+}
+
+.dot-flashing::before,
+.dot-flashing::after {
+  position: absolute;
+  top: 0;
+  animation: dot-flashing 1s infinite alternate;
+  border-radius: 9999px;
+  background-color: hsl(var(--primary));
+  width: 8px;
+  height: 8px;
+  content: "";
+}
+
+.dot-flashing::before {
+  left: -12px;
+  animation-delay: 0s;
+}
+
+.dot-flashing::after {
+  left: 12px;
+  animation-delay: 1s;
+}
+
+@keyframes dot-flashing {
+  0% {
+    background-color: hsl(var(--primary));
+  }
+
+  50%,
+  100% {
+    background-color: hsl(var(--primary) / 0.5);
+  }
+}

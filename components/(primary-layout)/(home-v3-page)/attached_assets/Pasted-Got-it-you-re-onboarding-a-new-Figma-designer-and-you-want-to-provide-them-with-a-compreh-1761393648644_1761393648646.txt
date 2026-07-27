@@ -1,0 +1,228 @@
+Got it ✅ — you’re onboarding a new **Figma designer**, and you want to provide them with a **comprehensive design documentation** that clearly defines all key aspects of your design system: **colors, typography, shadows, components, spacing, grids, iconography, states, and usage guidelines**.
+
+Below is a **professional, enhanced, and structured documentation template** — written as if it’s a “Design System & Figma Onboarding Guide.”
+You can easily adapt this to your brand or project specifics later.
+
+---
+
+# 🎨 **Design System & Figma Onboarding Documentation**
+
+### 📘 Purpose
+
+This document provides a complete overview of our **design system**, ensuring visual consistency, usability, and scalability across our digital products.
+It will help the **Figma Designer** understand our visual identity, how components are built, and how to maintain coherence in future designs.
+
+---
+
+## 1. 🌈 Color System
+
+### **1.1 Primary Palette**
+
+| Name          | HEX     | Usage                               |
+| ------------- | ------- | ----------------------------------- |
+| Primary       | #0052CC | Brand color, primary actions, links |
+| Primary Light | #4C9AFF | Hover, highlights, backgrounds      |
+| Primary Dark  | #0747A6 | Active states, focus rings          |
+| Accent        | #36B37E | Success actions, positive states    |
+
+### **1.2 Neutral Palette**
+
+| Name        | HEX     | Usage                   |
+| ----------- | ------- | ----------------------- |
+| White       | #FFFFFF | Backgrounds, cards      |
+| Light Gray  | #F4F5F7 | Backgrounds, dividers   |
+| Medium Gray | #C1C7D0 | Borders, secondary text |
+| Dark Gray   | #172B4D | Headings, body text     |
+
+### **1.3 Semantic Colors**
+
+| Type    | Color   | Usage                     |
+| ------- | ------- | ------------------------- |
+| Success | #36B37E | Positive feedback         |
+| Warning | #FFAB00 | Caution messages          |
+| Error   | #FF5630 | Validation errors, alerts |
+| Info    | #0065FF | Informational states      |
+
+> **Guideline:**
+> Maintain WCAG contrast ratio ≥ 4.5:1 for text. Use semantic colors consistently for accessibility.
+
+---
+
+## 2. 🔠 Typography
+
+### **2.1 Font Family**
+
+* **Primary Typeface:** Inter (Google Fonts)
+
+  * Clean, modern, versatile
+* **Fallbacks:** Arial, sans-serif
+
+### **2.2 Font Scale**
+
+| Type       | Size | Weight | Line Height | Usage            |
+| ---------- | ---- | ------ | ----------- | ---------------- |
+| H1         | 48px | 700    | 120%        | Page titles      |
+| H2         | 32px | 600    | 130%        | Section headers  |
+| H3         | 24px | 600    | 130%        | Subheadings      |
+| Body Large | 18px | 400    | 150%        | Paragraphs       |
+| Body Small | 14px | 400    | 150%        | Secondary text   |
+| Caption    | 12px | 400    | 140%        | Labels, metadata |
+
+> **Guideline:**
+> Avoid more than 3 font weights on a single page. Maintain clear hierarchy with consistent spacing between text blocks.
+
+---
+
+## 3. 🧱 Spacing & Layout
+
+### **3.1 Grid System**
+
+* **Desktop Grid:** 12 columns, 80px margins, 20px gutters
+* **Mobile Grid:** 4 columns, 16px margins, 16px gutters
+
+### **3.2 Spacing Scale**
+
+| Token | Value | Usage                      |
+| ----- | ----- | -------------------------- |
+| 4     | 4px   | Small gaps (icons, labels) |
+| 8     | 8px   | Tight elements             |
+| 16    | 16px  | Default spacing            |
+| 24    | 24px  | Section padding            |
+| 32    | 32px  | Layout spacing             |
+| 64    | 64px  | Major sections             |
+
+> **Guideline:**
+> Use spacing tokens instead of fixed values to maintain rhythm.
+
+---
+
+## 4. 🌫️ Shadows & Elevation
+
+| Level | Shadow                     | Usage             |
+| ----- | -------------------------- | ----------------- |
+| 0     | none                       | Flat surfaces     |
+| 1     | 0 1px 3px rgba(0,0,0,0.12) | Cards, buttons    |
+| 2     | 0 4px 6px rgba(0,0,0,0.16) | Floating elements |
+| 3     | 0 8px 16px rgba(0,0,0,0.2) | Modals, overlays  |
+
+> **Guideline:**
+> Use subtle shadows to show depth, not distraction. Maintain consistency across similar components.
+
+---
+
+## 5. 🧩 Components
+
+### **5.1 Buttons**
+
+| Variant   | Background  | Text Color | Border      | States                                   |
+| --------- | ----------- | ---------- | ----------- | ---------------------------------------- |
+| Primary   | Primary     | White      | None        | Hover: Primary Light; Disabled: Gray 300 |
+| Secondary | White       | Primary    | 1px Primary | Hover: Light Gray                        |
+| Ghost     | Transparent | Primary    | None        | Hover: Light Gray                        |
+
+> **Include in Figma:** Button variants (Primary, Secondary, Ghost) with states (Default, Hover, Focused, Disabled, Loading)
+
+---
+
+### **5.2 Inputs**
+
+* **Field Height:** 44px
+* **Border:** 1px #C1C7D0 (focus: #0052CC)
+* **Label:** 14px / Medium Gray
+* **Error Text:** 12px / Error Red
+
+> **Variants:** Text, Password, Dropdown, Textarea
+
+---
+
+### **5.3 Navigation**
+
+* **Navbar height:** 64px
+* **Active state:** Underline or bold text
+* **Hover:** Light gray background
+
+---
+
+### **5.4 Cards**
+
+* **Padding:** 24px
+* **Border Radius:** 8px
+* **Shadow:** Level 1
+* **Title:** H3
+* **Body:** Body Large
+
+---
+
+## 6. 🧭 Iconography
+
+* **Set:** Material Icons / Feather Icons (consistent)
+* **Stroke Width:** 2px
+* **Color:** Inherit text color
+* **Size:** 16px / 24px / 32px (depending on usage)
+
+---
+
+## 7. 🪟 States & Interactions
+
+* **Hover:** Use lighter tint of base color
+* **Active:** Use darker tint
+* **Focus:** 2px outline in primary color
+* **Disabled:** 50% opacity, no shadow
+
+---
+
+## 8. 📁 Figma File Organization
+
+**Recommended Structure:**
+
+```
+📂 Design System
+ ┣ 🎨 Colors
+ ┣ 🔠 Typography
+ ┣ 🧱 Spacing & Grids
+ ┣ 🧩 Components
+ ┣ 🪟 States
+ ┣ 🖼️ Icons & Illustrations
+ ┗ 📚 Documentation (for guidelines)
+```
+
+> **Tip:**
+> Use **Auto Layout**, **Variants**, and **Component Properties** in Figma for scalable and responsive design systems.
+
+---
+
+## 9. 🧭 Brand Voice & Visual Direction
+
+* **Tone:** Modern, clean, minimal, approachable
+* **Design Style:** Flat design with soft shadows
+* **Corner Radius:** 8px standard
+* **Illustrations:** Simple, geometric, colorful but not overwhelming
+
+---
+
+## 10. ✅ Handoff & Collaboration Guidelines
+
+* All new designs must use **existing components** before creating new ones.
+* When new patterns emerge, **document and propose** them for inclusion in the design system.
+* Follow **naming conventions** and **autolayout practices** for all Figma frames.
+* Keep tokens (colors, typography, spacing) centralized.
+
+---
+
+## 🔧 Future Enhancements
+
+* Add **Design Tokens** (JSON format) for dev handoff.
+* Create **dark mode** palette.
+* Integrate **Figma Variables** for dynamic theming.
+
+---
+
+Would you like me to **customize this documentation** for your **specific brand (with your actual color palette, typography, and component style)** so it looks like a finished internal design guide for your team?
+If yes — please share:
+
+* Your brand colors (or logo)
+* Font choices (if defined)
+* Component style (flat, neumorphic, minimal, etc.)
+* Product type (e.g. SaaS app, e-commerce, portfolio, etc.)
+
+Then I’ll tailor this document perfectly for your team’s onboarding.

@@ -1,0 +1,177 @@
+@import "../node_modules/tailwindcss/index.css";
+@import "../node_modules/tw-animate-css/dist/tw-animate.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  /* Custom breakpoint for extra-small screens (360px+) */
+  --breakpoint-xs: 360px;
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
+
+  --font-manrope: var(--font-manrope);
+  --font-geist-sans: var(--font-geist-sans);
+  --font-geist-mono: var(--font-geist-mono);
+  --font-bengali: var(--font-bengali);
+
+  /* Brand color tokens (Gaia design system) */
+  --color-brand: #137fec;
+  --color-brand-dark: #000000;
+  --color-brand-surface: #080808;
+  --color-brand-canvas: #040404;
+
+  /* Project-type semantic accent colors — use these everywhere, never raw hex */
+  --color-type-book: #137fec;
+  --color-type-research: #10b981;
+  --color-type-assignment: #f59e0b;
+
+  /* Subtle background tints (12 % opacity) for project-type surfaces */
+  --color-type-book-subtle: rgba(19, 127, 236, 0.12);
+  --color-type-research-subtle: rgba(16, 185, 129, 0.12);
+  --color-type-assignment-subtle: rgba(245, 158, 11, 0.12);
+
+  /* animation */
+  --animate-checkbox: checkbox 0.3s ease-in-out;
+  @keyframes checkbox {
+    0% {
+      background-position-y: 0.25em;
+    }
+    50% {
+      background-position-y: -0.1em;
+    }
+    100% {
+      background-position-y: 0;
+    }
+  }
+}
+
+/* accent color */
+@utility current {
+  --accent: currentColor;
+}
+
+@utility foreground {
+  --accent: var(--foreground);
+  --accent-foreground: var(--background);
+}
+
+@utility primary {
+  --accent: var(--primary);
+  --accent-foreground: var(--primary-foreground);
+}
+
+@utility secondary {
+  --accent: var(--secondary);
+  --accent-foreground: var(--secondary-foreground);
+}
+
+@utility accent {
+  --accent: var(--accent);
+  --accent-foreground: var(--accent-foreground);
+  --primary: var(--accent);
+  --primary-foreground: var(--accent-foreground);
+  --secondary: var(--accent);
+  --secondary-foreground: var(--accent-foreground);
+}
+
+/* Base Styles */
+@layer base {
+  @import "../assets/styles/base/variables.css";
+  @import "../assets/styles/base/typography.css";
+
+  /* Themed scrollbars (Firefox + WebKit) */
+  :root {
+    --sb-track: var(--background);
+    --sb-thumb: var(--muted);
+  }
+
+  :root.dark {
+    --sb-track: var(--background);
+    --sb-thumb: var(--muted);
+  }
+
+  html,
+  body {
+    scrollbar-color: var(--sb-thumb) var(--sb-track);
+    scrollbar-width: thin;
+  }
+
+  * {
+    scrollbar-color: var(--sb-thumb) var(--sb-track);
+    scrollbar-width: thin;
+  }
+
+  *::-webkit-scrollbar {
+    width: 0.25rem;
+    height: 0.25rem;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: var(--sb-track);
+  }
+
+  *::-webkit-scrollbar-thumb {
+    opacity: 0.25;
+    border: 1px solid var(--sb-track);
+    border-radius: 9999px;
+    background-color: var(--sb-thumb);
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    opacity: 0.75;
+    background-color: var(--sb-thumb);
+  }
+}
+
+/* Component Styles */
+@layer components {
+  @import "../assets/styles/components/checkbox.css";
+  @import "../assets/styles/components/tiptap.css";
+  @import "../assets/styles/components/fortune-sheet.css";
+  @import "../assets/styles/components/inline-suggestion.css";
+  @import "../assets/styles/components/writing-canvas.css";
+}
+
+/* Utility Styles */
+@layer utilities {
+  @import "../assets/styles/utilities/loading.css";
+  @import "../assets/styles/utilities/intersection-observer.css";
+  @import "../assets/styles/utilities/shine.css";
+}

@@ -1,0 +1,375 @@
+================================================================================
+DOMAIN 4: COMPLETE RENDERING AND EXPORT PIPELINE — PRESENTON
+================================================================================
+Implementation-grade analysis of all transformations, output formats,
+and delivery mechanisms.
+
+--------------------------------------------------------------------------------
+(a) PPTX GENERATION PIPELINE
+--------------------------------------------------------------------------------
+
+The system does NOT generate .pptx files directly from slide JSON via
+python-pptx in the backend. Instead, PPTX export uses a hybrid approach:
+
+1. The backend builds a presentation export URL pointing to the Next.js
+   frontend's /pdf-maker page, which renders the presentation in a browser
+   via React/Konva canvas components.
+
+2. export_utils.py::export_presentation() constructs a URL like:
+   {NEXT_PUBLIC_URL}/pdf-maker?id={presentation_id}&fastapiUrl={fastapi_url}#{exportCookie}
+
+3. This URL is passed to EXPORT_TASK_SERVICE.export_from_url() which spawns
+   a Node.js child process (the "presentation-export" runtime bundle at
+   EXPORT_RUNTIME_DIR/index.cjs) that:
+   - Launches a headless Chromium (Puppeteer)
+   - Navigates to the export URL
+   - Waits for the page to render all slides
+   - Captures the output as either PDF (via Puppeteer print-to-PDF) or
+     PPTX (via the bundled Python "convert" binary)
+
+4. The Node export runtime communicates via a JSON file-based protocol:
+   Python writes export_task.json to a temp dir, Node reads it, processes,
+   and writes export_task.response.json back. The service polls for
+   completion with a 300-second timeout.
+
+5. For PPTX-to-HTML conversion (template import, font checking):
+   EXPORT_TASK_SERVICE.convert_pptx_to_html() spawns the same Node runtime
+   with type="pptx-to-html", returns PptxToHtmlDocument (list of slide HTML
+   strings, font CSS, width/height).
+
+6. For PPTX-to-JSON conversion (template extraction):
+   EXPORT_TASK_SERVICE.convert_pptx_to_json() with type="pptx-to-json"
+   returns PptxToJsonDocument containing layouts as list of dicts.
+
+7. The bundled "convert" binary (at {export_dir}/py/convert-{platform}-{arch})
+   is a PyInstaller-compiled Python module that handles the actual PPTX
+   manipulation using python-pptx. The _replace_fonts_in_pptx_xml() function
+   in pptx_font_utils.py directly manipulates PPTX XML (zipfile + ElementTree)
+   to replace font typefaces across slides, slideLayouts, slideMasters, charts.
+
+8. For schema extraction:
+   EXPORT_TASK_SERVICE.extract_schema() with type="extract-schema" navigates
+   to a Next.js /schema?group={template_name} URL and extracts the editable
+   content schema from the rendered template page.
+
+ExportTaskService operations (all via Node.js subprocess):
+  - export_from_url(url, format) -> PDF or PPTX from rendered URL
+  - convert_pptx_to_html(pptx_path) -> PptxToHtmlDocument
+  - convert_pptx_to_json(pptx_path) -> PptxToJsonDocument
+  - render_html_to_image(html) -> image file
+  - render_htmls_to_images(htmls) -> batch image rendering
+  - render_json_to_image(layout_json) -> rendered slide image
+  - extract_schema(url) -> ExtractSchemaDocument
+
+Node export runtime task types: "export", "pptx-to-html", "pptx-to-json",
+  "html-to-image", "html-to-images", "json-to-image", "extract-schema"
+
+--------------------------------------------------------------------------------
+(b) TEMPLATE SYSTEM V1 AND V2
+--------------------------------------------------------------------------------
+
+TEMPLATE SYSTEM V1 (Legacy):
+- PresentationLayoutModel: name, ordered flag, icon_type/icon_weight,
+  list of SlideLayoutModel objects. Each SlideLayoutModel has id, name,
+  description, and json_schema (a JSON Schema dict).
+- Schema-first approach: each slide layout defined by JSON Schema that LLM fills.
+- Templates resolved by get_layout_by_name.py with three strategies:
+  1. extract-schema via Node export runtime (primary)
+  2. HTTP fallback to http://localhost/api/template?group={name}
+  3. Local settings.json file in servers/nextjs/app/presentation-templates/{name}/
+- Custom templates (prefixed "custom-") loaded from DB (PresentationLayoutCodeModel)
+  and compiled via Next.js POST to http://localhost/api/template/custom
+- Layout code validation POSTs to Next.js /api/validate-layout-code endpoint
+
+TEMPLATE SYSTEM V2 (Current):
+- Defined in templates/v2/ with a component-based architecture.
+
+V2 Layout Hierarchy (templates/v2/models/layouts.py):
+  - RawSlideLayout: id, description, elements (list of SlideElement) — raw from PPTX
+  - Component: id, description, position, elements (min 1) — reusable structural unit
+  - SlideLayout: id, description, components (list of Component) — complete slide
+  - SlideLayouts: layouts (min 1) — collection of slide layouts
+  - MergedComponent: id, description, variants (list of Component) — multi-variant
+  - MergedComponents: components (list of MergedComponent)
+  - SimilarComponents / SimilarComponentsList — for clustering
+
+V2 Element Types (templates/v2/models/elements.py — 11 types as discriminated union):
+  1. text: TextRun-based text with font, alignment, fill, stroke, shadow,
+     min/max length constraints
+  2. container: groups with padding, border radius, single child
+  3. image: data (URL), fit (contain/cover/fill), flip, crop, border radius,
+     clip path, is_icon flag, icon_type
+  4. text-list: items (list of list of TextRun), marker (bullet/number/none),
+     min/max items and item length
+  5. table: columns and rows as TableCell (color, font, alignment, runs),
+     with min/max rows/columns
+  6. vector: polygon/ellipse shapes with points, curves, corner radii, fill, stroke
+  7. chart: 12 chart types (bar, horizontal_bar, line, area, pie, donut,
+     stacked_bar, horizontal_stacked_bar, scatter, radar, polar_area),
+     with categories, series (ChartSeries with name+values), data labels,
+     legend, axes, grid
+  8. infographic: progress_bar and gauge types with min/max/value data and colors
+  9. flex: flexbox container with direction, wrap, gap, align_items, justify_content,
+     min/max children
+  10. grid: grid container with columns, rows, gap, alignment
+  11. group: simple grouping with children
+
+V2 Schema Generation (templates/v2/schema.py):
+  - extract_slide_schema_from_layout(): converts RawSlideLayout elements to JSON Schema
+  - get_template_schema(): generates per-slide content schemas from template JSON
+  - Elements marked decorative=false become editable content fields
+  - decorative=true elements are fixed design elements
+  - flex/grid with repeated children collapsed into array schemas with min/maxItems
+  - Repeated name suffixes (e.g., _1, _2) normalized for schema generation
+  - Chart schemas include chart_type (enum), title, categories (max 24),
+    series (max 12, each with values max 24)
+  - Infographic schemas have oneOf for progress_bar/gauge data types
+
+V2 Template Generation (templates/v2/generation.py):
+  - generate_template(): Takes RawSlideLayouts + slide image URLs, generates
+    SlideLayouts via LLM with parallel execution (up to 10 concurrent slides)
+  - Each slide layout generated by sending raw PPTX elements + slide image to LLM
+    with GENERATE_SLIDE_LAYOUT_SYSTEM_PROMPT
+  - LLM can call previewSlide tool (tools.py) to render candidate layouts to
+    1280x720 images for visual review
+  - PreviewSlideTool.render() calls EXPORT_TASK_SERVICE.render_json_to_image()
+  - After generation, merge_similar_components() clusters structurally similar
+    components using LLM-based clustering + union-find deduplication with
+    aspect-ratio and position signatures
+  - _replace_content_image_urls() replaces content image URLs with placeholder URLs
+
+Default Templates (templates/default_templates.py):
+  - Imports bundled templates from top-level templates/ directory
+  - Each template dir contains template.json with id, name, description, layouts,
+    components, merged_components, fonts, thumbnail
+  - Static assets (static/ subdirectory) copied to
+    {APP_DATA_DIRECTORY}/templates/{template_id}/static/
+  - Static asset URLs in template JSON rewritten from "static/..." to
+    "/app_data/templates/{template_id}/..."
+  - 7 bundled templates: momentum (preferred), dynamic, executive, general,
+    modern, standard, swift
+
+--------------------------------------------------------------------------------
+(c) EXPORT FORMATS SUPPORTED
+--------------------------------------------------------------------------------
+
+1. PPTX EXPORT:
+   - Via export_from_url() with format="pptx"
+   - Renders Next.js presentation page in headless Chromium
+   - Bundled convert binary (PyInstaller-compiled) handles PPTX structure creation
+   - Output: {APP_DATA_DIRECTORY}/exports/{title}.pptx
+
+2. PDF EXPORT:
+   - Via export_from_url() with format="pdf"
+   - Same Chromium rendering, uses Puppeteer's print-to-PDF
+   - Output: {APP_DATA_DIRECTORY}/exports/{title}.pdf
+
+3. HTML EXPORT (PPTX-to-HTML):
+   - Via convert_pptx_to_html()
+   - Converts existing PPTX files to per-slide HTML strings with extracted font CSS
+   - Returns PptxToHtmlDocument {slides: list[str], font_css, width, height,
+     images_dir, fonts_dir}
+   - Used for template preview rendering and font checking
+
+4. JSON EXPORT (PPTX-to-JSON):
+   - Via convert_pptx_to_json()
+   - Converts PPTX to PptxToJsonDocument {layouts: list[dict]}
+   - Used for template extraction from existing presentations
+
+5. IMAGE EXPORT:
+   - HTML-to-image: render_html_to_image() — takes raw HTML, renders at given
+     width/height
+   - HTML-to-images (batch): render_htmls_to_images() — batch with fallback
+   - JSON-to-image: render_json_to_image() — takes slide component JSON
+     (with _localize_json_image_assets embedding local images as data URIs),
+     renders at given dimensions, optionally with custom fonts
+
+6. SCHEMA EXTRACTION:
+   - extract_schema() — navigates to Next.js schema page, extracts editable
+     content schema from rendered template
+
+--------------------------------------------------------------------------------
+(d) IMAGE GENERATION AND ICON FINDING PIPELINE
+--------------------------------------------------------------------------------
+
+IMAGE GENERATION (image_generation_service.py):
+9 providers selected via environment configuration:
+  1. Pixabay (stock photos via API)
+  2. Pexels (stock photos via API)
+  3. Gemini Flash (Google Gemini image generation)
+  4. NanoBanana Pro (Google model)
+  5. DALL-E 3 (OpenAI)
+  6. GPT-Image-1.5 (OpenAI)
+  7. ComfyUI (self-hosted, workflow-based with seed randomization)
+  8. Open WebUI (OpenAI-compatible API)
+  9. OpenAI-compatible providers
+
+- Stock providers (Pexels/Pixabay) use prompt directly
+- AI providers append theme context
+- Parallel or sequential generation controlled by is_parallel_image_generation_enabled()
+- Images saved to {APP_DATA_DIRECTORY}/images/{uuid}.png
+- Returns ImageAsset (DB-tracked) or URL string
+- Per-event-loop lock prevents concurrent image generation when parallel disabled
+
+ICON FINDING (icon_finder_service.py):
+- Uses fastembed_vectorstore with AllMiniLML6V2 embedding model
+- Icons loaded from bundled assets/icons.json (icon name + tags)
+- Only "bold" weight icons embedded; other weights resolved by filename suffix
+- Vectorstore cached at {APP_DATA_DIRECTORY}/fastembed_cache/
+- search_icons() returns SVG URLs from /static/icons/{weight}/{icon_name}.svg
+- 6 icon weights: bold, duotone, fill, light, regular, thin
+- Falls back to "regular" weight if requested weight file doesn't exist
+
+ASSET PROCESSING (process_slides.py):
+- process_slide_and_fetch_assets(): scans slide content for image_prompt and
+  icon_query fields (also __image_prompt__, __icon_query__, prompt, query),
+  fetches assets in parallel, injects URLs back into slide content
+- Template-aware field keys: image_url/icon_url for template slides,
+  __image_url__/__icon_url__ for v2 slides
+- process_old_and_new_slides_and_fetch_assets(): reuses existing image/icon
+  URLs when prompts match between old and new slide content
+- process_slide_add_placeholder_assets(): replaces all image/icon prompts
+  with placeholder URLs
+
+--------------------------------------------------------------------------------
+(e) THEME SYSTEM
+--------------------------------------------------------------------------------
+
+THEME DATA MODEL (theme_data.py):
+- ThemeData: 15 fields — primary, background, card, stroke, background_text,
+  primary_text, graph_0 through graph_9
+- GeneratedColorPalette: primary, background, accent_1, accent_2, text_1, text_2
+  (each with 10 lightness variations 50-900), plus lightness values for each color
+
+COLOR GENERATION (theme_utils.py):
+- Uses OKLCH color space (perceptually uniform) with full sRGB conversion
+- generate_color_palette(): accepts optional primary, background, accent_1,
+  accent_2, text_1, text_2 (hex); generates missing ones:
+  - Primary: random L (0-1), C (0-0.4), H (0-360)
+  - Background: random until WCAG contrast >= 6 against primary
+  - Accent 1/2: derived from primary with constrained hue distance (90-degree offsets)
+  - Text colors: high contrast (WCAG >= 6) against background/primary
+- _get_color_for_all_lightness_values(): generates 10 shades (50-900) per base
+  color by varying lightness while keeping chroma and hue
+
+THEME APPLICATION (theme_generate.py endpoint):
+- POST /theme/generate accepts optional color overrides
+- Determines is_dark_theme from background_lightness < 0.65
+- Card color = background variation at lightness distance 1
+- Stroke color = background variation at lightness distance 2
+- Graph colors = primary variations (reversed for light themes)
+- Returns ThemeData with all 15 colors
+
+CUSTOM THEMES (theme.py endpoint):
+- Stored in KeyValueSqlModel with key "presentation_custom_themes"
+- Each theme: id, name, description, user, logo (ImageAsset UUID), logo_url,
+  company_name, data (dict)
+- Logo images resolved from ImageAsset DB records
+- Built-in/default themes served by Next.js constants (backend returns empty list)
+
+--------------------------------------------------------------------------------
+(f) PREVIEW/RENDERING PIPELINE
+--------------------------------------------------------------------------------
+
+SLIDE PREVIEW (fonts_and_slides_preview.py):
+- PPTX-to-slide-image pipeline: PPTX -> HTML conversion -> per-slide HTML
+  wrapping -> headless Chromium rendering -> PNG images
+- render_pptx_slides_to_images():
+  1. Generates @font-face CSS for uploaded custom fonts (local font files
+     with file:// URLs)
+  2. Calls convert_pptx_to_html() for per-slide HTML + font CSS
+  3. For each slide: localizes asset URLs to data URIs, generates Google Fonts
+     <link> tags, generates Tailwind fallback CSS
+  4. Wraps each slide HTML in _build_slide_preview_html() — full HTML document
+     with Tailwind CDN, Chart.js CDN, font links, viewport sizing
+  5. Batch renders all slide HTMLs to images via render_htmls_to_images()
+- _localize_preview_asset_urls(): regex-replaces src/href/url() references to
+  /app_data/ and /static/ paths with base64 data URIs
+- _tailwind_fallback_css_for_slide_html(): generates CSS for common Tailwind
+  classes (flex, absolute, text-center, etc.) as fallback when CDN unavailable
+- _font_stylesheet_links_for_slide_html(): extracts font-family names from
+  Tailwind font-['Name'] classes and generates Google Fonts <link> tags
+
+V2 TEMPLATE PREVIEW (tools.py PreviewSlideTool):
+- Renders candidate SlideLayout JSON to 1280x720 images during template generation
+- Calls EXPORT_TASK_SERVICE.render_json_to_image() with component JSON
+- Saves preview artifacts (JSON + PNG) to
+  {APP_DATA_DIRECTORY}/preview_slide/{slide_index}/{n}.json and .png
+
+FONT CHECKING AND REPLACEMENT:
+- check_fonts_in_pptx_handler(): extracts fonts from PPTX, checks Google Fonts
+  availability, checks for user-uploaded fonts
+- upload_fonts_and_preview_handler(): full pipeline — extracts fonts, replaces
+  with uploaded/Google fonts, renders slide previews
+- Font extraction (pptx_font_utils.py): parses PPTX XML (slides, layouts, masters,
+  charts) to find all typeface references, resolving theme font references
+  (+mn-lt, +mj-lt, etc.)
+- Font variant detection: tracks regular/bold/italic/bold_italic per font
+- Embedded font extraction: extracts .fntdata (EOT) files from PPTX, converts
+  to TTF/OTF
+- Font replacement: _replace_fonts_in_pptx_xml() rewrites typeface attributes
+  in PPTX XML, including inherited paragraph defaults
+- create_font_alias_config(): generates fontconfig XML mapping variant family
+  names to normalized names
+
+--------------------------------------------------------------------------------
+(g) TEMPLATE CONVERSION AND DELIVERY
+--------------------------------------------------------------------------------
+
+DELIVERY MECHANISM:
+- Full export flow: AI generates slide JSON -> stored in DB (SlideModel with
+  content + ui fields) -> Next.js frontend renders slides via React/Konva ->
+  headless Chromium captures -> convert binary produces final PPTX/PDF
+- Export URL includes cookie header for authentication in authenticated Next.js
+  routes
+- ASSETS_BASE_URL set to "/app_data" for the Node runtime
+- APP_DATA_DIRECTORY and TEMP_DIRECTORY passed as env vars to Node process
+- Electron mode checks for pinned Chromium at PUPPETEER_EXECUTABLE_PATH;
+  refuses to download alternative browsers
+
+ASSET URL NORMALIZATION (asset_directory_utils.py):
+- normalize_slide_asset_url(): handles http/https/data/blob URLs as-is;
+  converts /app_data/ and /static/ paths to absolute URLs with FastAPI base
+- filesystem_image_path_to_app_data_url(): maps filesystem paths under
+  APP_DATA_DIRECTORY/images/ to /app_data/images/ URLs
+- resolve_app_path_to_filesystem(): resolves app-served paths back to
+  filesystem paths (handles /app_data/, /static/, file:// URLs, absolute paths)
+- _localize_json_image_assets() in export_task_service: embeds local /app_data/
+  and /static/ image references as base64 data URIs for headless rendering
+
+OFFICE DOCUMENT TEXT EXTRACTION (office_document_service.py):
+- Lightweight ZIP-based extraction (no python-pptx dependency) for DOCX, PPTX,
+  XLSX, ODF files
+- Used for document-to-text conversion for AI context, not for rendering
+- PPTX extraction: reads ppt/slides/slideN.xml files, extracts text from
+  <a:t> elements
+
+TEMPLATE CONVERSION SCRIPTS (top-level scripts/):
+- convert-template.mjs: Converts template definitions to runtime format
+- convert-presentation-template.mjs: Converts presentation template definitions
+- sync-presentation-export.cjs: Syncs the presentation-export runtime package
+  (checks version compatibility, copies files)
+- These scripts ensure the Node.js export runtime stays in sync with the
+  backend's expected API
+
+SUMMARY OF RENDERING FLOW:
+  AI generates slide JSON (matching template v2 schema)
+    -> stored in SlideModel.content (JSON) + SlideModel.ui (hydrated components)
+    -> Next.js frontend renders slides via React/Konva canvas components
+    -> For export: headless Chromium navigates to /pdf-maker page
+    -> Puppeteer captures rendered slides
+    -> For PDF: Puppeteer print-to-PDF
+    -> For PPTX: bundled convert binary (PyInstaller-compiled python-pptx)
+    -> Output saved to {APP_DATA_DIRECTORY}/exports/{title}.{ext}
+    -> Path returned to caller
+
+  For template creation from PPTX:
+    Uploaded PPTX -> convert_pptx_to_json() (extracts raw layouts)
+    -> convert_pptx_to_html() + render slide preview images
+    -> LLM generates SlideLayouts from raw elements + slide images
+    -> merge_similar_components() clusters similar components
+    -> TemplateV2 persisted to DB with layouts, components, merged_components
+
+================================================================================
+END OF DOMAIN 4 ANALYSIS
+================================================================================

@@ -1,5 +1,7 @@
 import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { buildConversationPreviewForPrivacy } from "@/lib/chat/privacy";
+import type { ChatPrivacyProfile } from "@/lib/chat/types";
 
 async function requireUserId(ctx: any): Promise<string> {
   const identity = await ctx.auth.getUserIdentity();
@@ -23,10 +25,6 @@ async function requireMessage(ctx: any, messageId: any, userId: string) {
   return message;
 }
 
-function compactPreview(content: string): string {
-  return content.replace(/\s+/g, " ").trim().slice(0, 240);
-}
-
 async function insertMessage(ctx: any, args: any) {
   const now = Date.now();
   return await ctx.db.insert("messages", {
@@ -44,13 +42,20 @@ async function insertMessage(ctx: any, args: any) {
   });
 }
 
-async function touchConversation(ctx: any, conversationId: any, content: string, modelHandle?: string, delta = 1) {
+async function touchConversation(
+  ctx: any,
+  conversationId: any,
+  content: string,
+  modelHandle?: string,
+  delta = 1,
+  privacy?: Partial<ChatPrivacyProfile>,
+) {
   const conversation = await ctx.db.get(conversationId);
   if (!conversation) return;
   const now = Date.now();
   await ctx.db.patch(conversationId, {
     lastMessageAt: now,
-    lastMessagePreview: compactPreview(content),
+    lastMessagePreview: buildConversationPreviewForPrivacy(content, privacy),
     modelHandle: modelHandle ?? conversation.modelHandle,
     messageCount: Math.max(0, (conversation.messageCount ?? 0) + delta),
     updatedAt: now,
@@ -72,7 +77,12 @@ async function syncConversationAfterMessageDelete(ctx: any, conversationId: any)
 
   await ctx.db.patch(conversationId, {
     messageCount: remainingMessages.length,
-    lastMessagePreview: lastMessage ? compactPreview(lastMessage.content ?? "") : undefined,
+    lastMessagePreview: lastMessage
+      ? buildConversationPreviewForPrivacy(
+          lastMessage.content ?? "",
+          lastMessage.metadata?.privacy,
+        )
+      : undefined,
     lastMessageAt: lastMessage
       ? ((lastMessage.updatedAt ?? lastMessage.createdAt) as number)
       : conversation.createdAt,
@@ -133,7 +143,14 @@ export const appendUserMessage = mutation({
       role: "user",
       status: "completed",
     });
-    await touchConversation(ctx, args.conversationId, args.content);
+    await touchConversation(
+      ctx,
+      args.conversationId,
+      args.content,
+      undefined,
+      1,
+      args.metadata?.privacy,
+    );
     return await ctx.db.get(id);
   },
 });
@@ -159,7 +176,14 @@ export const appendAssistantPlaceholder = mutation({
       parentMessageId: args.parentMessageId,
       metadata: args.metadata,
     });
-    await touchConversation(ctx, args.conversationId, "", args.modelHandle);
+    await touchConversation(
+      ctx,
+      args.conversationId,
+      "",
+      args.modelHandle,
+      1,
+      args.metadata?.privacy,
+    );
     return await ctx.db.get(id);
   },
 });
@@ -179,7 +203,14 @@ export const appendUserMessageInternal = internalMutation({
       role: "user",
       status: "completed",
     });
-    await touchConversation(ctx, args.conversationId, args.content);
+    await touchConversation(
+      ctx,
+      args.conversationId,
+      args.content,
+      undefined,
+      1,
+      args.metadata?.privacy,
+    );
     return await ctx.db.get(id);
   },
 });
@@ -205,7 +236,14 @@ export const appendAssistantPlaceholderInternal = internalMutation({
       parentMessageId: args.parentMessageId,
       metadata: args.metadata,
     });
-    await touchConversation(ctx, args.conversationId, "", args.modelHandle);
+    await touchConversation(
+      ctx,
+      args.conversationId,
+      "",
+      args.modelHandle,
+      1,
+      args.metadata?.privacy,
+    );
     return await ctx.db.get(id);
   },
 });
@@ -223,7 +261,14 @@ export const appendAssistantChunk = mutation({
       content: nextContent,
       updatedAt: Date.now(),
     });
-    await touchConversation(ctx, message.conversationId, nextContent, message.modelHandle, 0);
+    await touchConversation(
+      ctx,
+      message.conversationId,
+      nextContent,
+      message.modelHandle,
+      0,
+      message.metadata?.privacy,
+    );
     return await ctx.db.get(args.messageId);
   },
 });
@@ -241,7 +286,14 @@ export const appendAssistantChunkInternal = internalMutation({
       content: nextContent,
       updatedAt: Date.now(),
     });
-    await touchConversation(ctx, message.conversationId, nextContent, message.modelHandle, 0);
+    await touchConversation(
+      ctx,
+      message.conversationId,
+      nextContent,
+      message.modelHandle,
+      0,
+      message.metadata?.privacy,
+    );
     return await ctx.db.get(args.messageId);
   },
 });
@@ -329,7 +381,14 @@ export const failAssistantMessage = mutation({
       },
       updatedAt: Date.now(),
     });
-    await touchConversation(ctx, message.conversationId, content, message.modelHandle, 0);
+    await touchConversation(
+      ctx,
+      message.conversationId,
+      content,
+      message.modelHandle,
+      0,
+      message.metadata?.privacy,
+    );
     return await ctx.db.get(args.messageId);
   },
 });
@@ -353,7 +412,14 @@ export const failAssistantMessageInternal = internalMutation({
       },
       updatedAt: Date.now(),
     });
-    await touchConversation(ctx, message.conversationId, content, message.modelHandle, 0);
+    await touchConversation(
+      ctx,
+      message.conversationId,
+      content,
+      message.modelHandle,
+      0,
+      message.metadata?.privacy,
+    );
     return await ctx.db.get(args.messageId);
   },
 });

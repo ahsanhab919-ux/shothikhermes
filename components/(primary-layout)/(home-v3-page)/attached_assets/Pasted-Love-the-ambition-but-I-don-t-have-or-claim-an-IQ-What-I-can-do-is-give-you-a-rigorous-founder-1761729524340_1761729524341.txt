@@ -1,0 +1,283 @@
+Love the ambition—but I don’t have (or claim) an IQ. What I *can* do is give you a rigorous, founder-grade review of your current **Shothik.ai “Presenton”** architecture and the code scaffolds we’ve put together (Next.js 16 + FastAPI + Postgres + per-deck themes, chat, slides/blocks, WS streaming). Below is a blunt, structured analysis with concrete fixes.
+
+---
+
+# Executive Summary
+
+**What’s strong**
+
+* Clear separation: **Next.js (UI)** ↔ **FastAPI (API/WS)** ↔ **Postgres (source of truth)**
+* **Per-deck theme persistence** is clean and already delivers real UX value.
+* The **Slides/Blocks/Threads/Messages** model anticipates growth (agent tools, streaming, export).
+* Replit-friendly setup, `.env` hygiene, and **Alembic** migrations → good DevEx.
+
+**What’s risky / missing**
+
+* **WS orchestration** lacks resilience (retries, idempotency, tool routing guarantees).
+* **Slide consistency & ordering** needs stronger invariants and indices.
+* **JSONB payloads** are great, but you need guardrails (validation/versioning) to avoid schema drift.
+* **Security**: no auth, multi-tenant isolation, or rate limiting yet.
+* **Exports & assets** need a dedicated pipeline (background jobs, storage, lifecycle).
+* **Observability** (traces, logs, metrics) not yet standardized.
+
+**Priority fixes (1–2 sprints)**
+
+1. Add a **Service Layer** + input validation (Pydantic) to prevent controller bloat and schema drift.
+2. Harden **WS streaming** (ack protocol, backoff, idempotent tool events).
+3. Strengthen **DB invariants** (unique index for `(deck_id, index)`, FK cascades, constraints).
+4. Introduce **auth + tenancy** (deck-scoped access control) and **rate limiting**.
+5. Background **export/asset** jobs with a queue; add observability (OpenTelemetry).
+
+---
+
+# Architecture Review (by layer)
+
+## Frontend (Next.js 16 + shadcn/ui)
+
+### Strengths
+
+* Layout split (Outline/Canvas/RightTabs) matches Manus/Genspark-style affordances.
+* Hooks approach (`useSlides`, `useDeckTheme`, `useChat`) is composable and testable.
+* Theme tokens (CSS vars) aligned with Shothik brand → good future theming.
+
+### Gaps & Fixes
+
+1. **State + data consistency**
+
+   * Adopt **React Query (TanStack Query)** for all REST calls to gain caching, retries, and dedup.
+   * Keep `useSlides`/`useChat` but have them **delegate to Query** for network + cache.
+
+   ```ts
+   // example: useSlides via TanStack Query
+   const { data: slides, isLoading } = useQuery({
+     queryKey: ['slides', deckId],
+     queryFn: () => jget<Slide[]>(`/api/v1/ppt/slides?deck_id=${deckId}`),
+     staleTime: 10_000,
+   });
+   ```
+
+2. **WS Resilience**
+
+   * Use a **single WS manager** with exponential backoff, heartbeat (ping/pong), and **message ack** IDs.
+   * On reconnect, **resync last N messages** via REST to close gaps.
+
+3. **Editor UX polish**
+
+   * Add **undo/redo** ring per slide (client-side), with periodic server snapshotting (version column).
+   * Keyboard shortcuts consistent with PowerPoint/Keynote (⌘/Ctrl + D duplicate slide, ↑/↓ nav, etc).
+   * Add **drag-to-reorder** with optimistic update; reconcile server order on success.
+
+4. **Thumbnails & Preview**
+
+   * Use `html-to-image` or `dom-to-image-more` for client thumbnails; batch using `requestIdleCallback` to avoid jank.
+   * Pre-render “skeleton” thumbnails to avoid layout shifts.
+
+---
+
+## API & Orchestration (FastAPI)
+
+### Strengths
+
+* Resource boundaries are sensible: **Deck** / Theme, **Slides** / **Blocks**, **Threads** / **Messages**, **Stream**.
+* Migrations exist and you’re using async SQLAlchemy.
+
+### Gaps & Fixes
+
+1. **Service Layer & Validation**
+
+   * Right now, routers mix reads/writes with domain logic. Introduce a **service module** per resource:
+
+     * `slides_service.py`: create/reorder/delete with invariants
+     * `blocks_service.py`: validation of `payload` per `type`
+     * `chat_service.py`: message persistence, tool routing
+   * Use **Pydantic models** for **payload validation** per block type:
+
+   ```python
+   class TextPayload(BaseModel):
+       text: str
+       size: conint(gt=6, lt=200) = 24
+       align: Literal['left','center','right'] = 'left'
+       color: constr(pattern=r'^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$') = '#0F172A'
+   ```
+
+2. **Invariants & Indices**
+
+   * Add **unique index**: `(deck_id, index)` on `slides` to prevent duplicates.
+   * Add index `slide_blocks(slide_id, z_index)`.
+   * Add **`version` INT** on slides/blocks for optimistic concurrency (avoid last-write wins).
+
+   ```sql
+   CREATE UNIQUE INDEX idx_slides_deck_order ON slides(deck_id, index);
+   ```
+
+3. **Tool events protocol**
+
+   * Define a **ToolEvent schema** with IDs and **idempotency keys**.
+   * Server emits `{type:"tool", id:"evt-uuid", name:"outline", args:{...}}`.
+   * Client **acks** with `{type:"ack", id:"evt-uuid"}` after applying changes.
+   * Server keeps a **short-term event log** (Redis or DB) to replay if client reconnects.
+
+4. **Rate limiting & abuse protection**
+
+   * Add **per-IP** + **per-user** limits on `/threads/*` and `/stream/*` (slowloris protection).
+   * If public preview: basic **captcha** or token gating for generation endpoints.
+
+5. **Auth & tenancy**
+
+   * Even if MVP, add **deck ownership** checks: all routes should verify `user_id` matches deck owner (or shared).
+   * Plan for **org multi-tenancy** (org_id on decks; row-level filters).
+
+6. **Background jobs**
+
+   * Offload export (PDF/PPTX), asset processing, and long generations to **RQ/Celery** or **Arq**; store job status and stream progress via WS.
+
+7. **Observability**
+
+   * Add **OpenTelemetry** instrumentation (FastAPI + SQLAlchemy), structured logs (JSON), and error boundaries.
+   * Emit custom spans: `slides.create`, `blocks.update`, `chat.stream.token` to trace slow paths.
+
+---
+
+## Database (PostgreSQL)
+
+### Strengths
+
+* JSONB for `payload` and `content` gives you flexibility.
+
+### Gaps & Fixes
+
+1. **JSONB schema drift**
+
+   * Maintain **payload versioning**: `payload: { v: 1, data: {...} }`.
+   * Add **constraints** in app layer with Pydantic per type; backfill migrators when you change shape.
+
+2. **Vacuum / bloat concerns**
+
+   * With frequent updates, plan autovacuum settings or periodic cleanup (especially for messages).
+
+3. **Soft vs hard delete**
+
+   * For slides/blocks, **hard delete** is fine now. Consider **soft delete** (deleted_at) if you later add restore/undo across sessions.
+
+---
+
+## Security & Compliance
+
+* **Auth**: Required before any prod traffic. Start with JWT (short TTL refresh) or session cookies (httpOnly).
+* **Permissions**: Owner, editor, viewer on deck; enforce at router level.
+* **Input hardening**: Strict Pydantic for every POST/PUT.
+* **Upload security**: Validate file types, use presigned URLs (S3/GCS).
+* **Secrets**: Don’t bake keys in build; use `.env` and secret manager for prod.
+
+---
+
+## Exports & Assets
+
+* **PDF Export**: Headless Chrome (Playwright) navigates `/deck/[id]/print` (print CSS) → stores file in object storage → returns signed URL.
+* **PPTX Export**: `python-pptx` service that maps blocks → shapes/styles. Keep as async job with progress events.
+* **Assets**: Object store + metadata table (`assets(id, deck_id, url, mime, width, height, created_at)`).
+
+---
+
+## Performance
+
+* **Frontend**:
+
+  * Virtualize slide outline for large decks.
+  * Debounce block edits; batch save by 250–500ms.
+  * Lazy-load right-panel tabs.
+
+* **Backend**:
+
+  * Use **SELECT … FOR UPDATE** when reordering slides to prevent race conditions.
+  * Add **prepared statements** for hot paths.
+  * If chat throughput grows, split **streaming** to a lightweight ASGI service.
+
+---
+
+## Testing Strategy
+
+* **Unit**: services (slides/blocks/tools) with in-memory DB or test schema.
+* **API**: FastAPI `TestClient`, fixtures to create deck/slide/block quickly.
+* **WS**: `websocket_connect` tests that simulate token stream and tool events.
+* **E2E**: Playwright—create deck → outline → rewrite → preview → export (stub).
+
+---
+
+# Concrete To-Do (ranked)
+
+1. **DB Hardening**
+
+   * Add unique index `(deck_id, index)`; add indices for FK columns; add `version` columns (int).
+   * Write a migration to backfill indices.
+
+2. **Validation & Services**
+
+   * Create `services/` modules; move logic from routers; add Pydantic models for **Text/Image/Shape** payloads with versions.
+
+3. **WS Protocol**
+
+   * Implement **ack/idempotency** for tool events; add server event log table (`tool_events(id, thread_id, name, args, created_at)`).
+
+4. **Auth & Tenancy**
+
+   * Add minimal auth; enforce deck ownership on every route.
+
+5. **React Query adoption**
+
+   * Wrap all fetches; cache slides & blocks by keys; optimistic updates with rollback.
+
+6. **Preview & Thumbs**
+
+   * Implement `html-to-image` thumbnails with idle batching; preview route.
+
+7. **Observability**
+
+   * OpenTelemetry + JSON logs; ship to a viewer (e.g., OpenObserve/Elastic).
+
+8. **Background Jobs**
+
+   * Add RQ/Redis (lightweight) for export; emit WS progress.
+
+---
+
+## Mini Snippets (drop-in)
+
+**Slides unique index (Alembic)**
+
+```python
+op.create_index("uq_slides_deck_index", "slides", ["deck_id", "index"], unique=True)
+```
+
+**Optimistic concurrency columns**
+
+```python
+version = sa.Column(sa.Integer, nullable=False, server_default="1")
+# on update: SET version = version + 1, and check previous version in WHERE
+```
+
+**Block payload schema (Pydantic)**
+
+```python
+class ImagePayload(BaseModel):
+    v: Literal[1] = 1
+    src: HttpUrl | None = None
+    prompt: str | None = None
+    fit: Literal["contain","cover","fill"] = "contain"
+    frame: dict = Field(default_factory=lambda: {"x":0,"y":0,"w":800,"h":450})
+```
+
+**Client save debouncer**
+
+```ts
+const save = useMemo(() => debounce((b: SlideBlock) => jput(`/api/v1/ppt/blocks/${b.id}`, b), 300), []);
+```
+
+---
+
+# Recommendation
+
+* **Stay on FastAPI + Postgres + Next.js**, harden the core as above, and only consider Motia (or any orchestration framework) as a **future microservice** for complex agent workflows once your current path is stable.
+* Ship the **V1**: chat (/outline, /rewrite), robust slides/blocks, live preview, and PDF export as an async job—with strong invariants, basic auth, and telemetry.
+
+If you want, I can generate **exact Alembic diffs** for the unique indices and `version` columns, plus a **service-layer skeleton** (slides_service, blocks_service, chat_service) so your team can paste them in and refactor quickly.

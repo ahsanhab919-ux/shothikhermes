@@ -1,0 +1,27 @@
+name: shothik-web-dast
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_url:
+        description: "Staging or preview URL to scan with OWASP ZAP"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  zap-baseline:
+    name: OWASP ZAP Baseline Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Run baseline scan
+        uses: zaproxy/action-baseline@v0.14.0
+        with:
+          target: ${{ inputs.target_url }}
+          fail_action: true
+          allow_issue_writing: false
+          cmd_options: "-a"

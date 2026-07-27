@@ -1,0 +1,184 @@
+/* ===== WRITING WORKSPACE - Book Publishing Platform ===== */
+
+/* Prevent horizontal overflow on mobile/tablet viewports */
+@media (max-width: 1023px) {
+  .primary-layout-wrapper {
+    overflow-x: clip;
+  }
+}
+
+/* Scrollbar utilities */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* Custom thin scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #283039;
+  border-radius: 10px;
+}
+
+/* Preview page aspect ratio */
+.preview-page {
+  aspect-ratio: 6 / 9;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3),
+    0 8px 10px -6px rgba(0, 0, 0, 0.3);
+}
+
+/* Drag handle cursor */
+.drag-handle {
+  cursor: grab;
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+/* Node connector line for outline */
+.node-connector {
+  position: absolute;
+  left: -24px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: rgba(19, 127, 236, 0.2);
+}
+
+/* Editor prose styling for Write view */
+.writing-canvas-editor .ProseMirror {
+  font-family: 'Georgia', 'Cambria', 'Times New Roman', serif;
+  font-size: 17px;
+  line-height: 1.75;
+  color: hsl(0 0% 20%);
+  letter-spacing: 0.01em;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  min-height: 60vh;
+  outline: none;
+}
+
+@media (min-width: 768px) {
+  .writing-canvas-editor .ProseMirror {
+    font-size: 18px;
+    line-height: 1.8;
+  }
+}
+
+.writing-canvas-editor .ProseMirror h1,
+.writing-canvas-editor .ProseMirror h2,
+.writing-canvas-editor .ProseMirror h3 {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-weight: 600;
+  color: hsl(0 0% 12%);
+}
+
+.writing-canvas-editor .ProseMirror h1 {
+  font-size: 1.875rem;
+  font-weight: 700;
+  margin-top: 2.5rem;
+  margin-bottom: 1.25rem;
+  line-height: 1.3;
+  letter-spacing: -0.02em;
+}
+
+.writing-canvas-editor .ProseMirror h2 {
+  font-size: 1.5rem;
+  margin-top: 2rem;
+  margin-bottom: 0.875rem;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+}
+
+.writing-canvas-editor .ProseMirror p {
+  margin-bottom: 1.25rem;
+}
+
+.writing-canvas-editor .ProseMirror blockquote {
+  border-left: 3px solid #137fec;
+  padding-left: 1.5rem;
+  margin: 1.5rem 0;
+  font-style: italic;
+  color: hsl(0 0% 40%);
+}
+
+.writing-canvas-editor .ProseMirror code {
+  font-family: 'JetBrains Mono', monospace;
+  background: hsl(0 0% 96%);
+  padding: 0.15em 0.4em;
+  border-radius: 0.25rem;
+  font-size: 0.875em;
+}
+
+.writing-canvas-editor .ProseMirror a {
+  color: #137fec;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.writing-canvas-editor .ProseMirror .is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: hsl(0 0% 55%);
+  opacity: 0.5;
+  pointer-events: none;
+  height: 0;
+  font-style: italic;
+}
+
+/* Dark mode overrides */
+.dark .writing-canvas-editor .ProseMirror {
+  color: hsl(210 10% 80%);
+}
+
+.dark .writing-canvas-editor .ProseMirror h1,
+.dark .writing-canvas-editor .ProseMirror h2,
+.dark .writing-canvas-editor .ProseMirror h3 {
+  color: hsl(210 10% 92%);
+}
+
+.dark .writing-canvas-editor .ProseMirror blockquote {
+  color: hsl(210 5% 55%);
+}
+
+.dark .writing-canvas-editor .ProseMirror code {
+  background: hsl(215 20% 15%);
+}
+
+/* Range input styling */
+input[type="range"] {
+  -webkit-appearance: none;
+  height: 6px;
+  border-radius: 999px;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  height: 14px;
+  width: 14px;
+  border-radius: 50%;
+  background: #137fec;
+  cursor: pointer;
+  border: 2px solid white;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+/* Fullscreen zen mode button */
+.zen-mode-btn {
+  position: fixed;
+  bottom: 1.5rem;
+  left: 1.5rem;
+  z-index: 50;
+}

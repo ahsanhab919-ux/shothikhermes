@@ -19,7 +19,7 @@ export {
 export { resolveHermesModelRoute } from "./modules/model-router";
 
 // Frontend Client Exports
-export { hermesClient, HermesClient, HermesClientError, type CreateSessionRequest, type CreateRunRequest, type ListSessionsParams, type SessionContext, type RunContext, type SessionAction } from "./client";
+export { hermesClient, HermesClient, HermesClientError, type ListSessionsParams, type SessionContext, type RunContext, type SessionAction, type RunAction } from "./client";
 export { useHermesSessionList, useHermesSession, useCreateHermesSession, useControlHermesSession, useHermesRun, useCreateHermesRun, useHermesRunStream, useOptimisticSessionAction, hermesQueryKeys } from "./hooks";
 import type { 
   HermesRun,

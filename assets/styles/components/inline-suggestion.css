@@ -1,0 +1,18 @@
+.ai-inline-suggestion {
+  color: var(--muted-foreground);
+  opacity: 0.5;
+  font-style: italic;
+  pointer-events: none;
+  user-select: none;
+  white-space: pre-wrap;
+}
+
+.dark .ai-inline-suggestion {
+  opacity: 0.4;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-inline-suggestion {
+    animation: none;
+  }
+}

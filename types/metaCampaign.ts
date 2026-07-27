@@ -1,0 +1,47 @@
+export type CampaignObjective =
+  | "OUTCOME_AWARENESS"
+  | "OUTCOME_TRAFFIC"
+  | "OUTCOME_ENGAGEMENT"
+  | "OUTCOME_LEADS"
+  | "OUTCOME_APP_PROMOTION"
+  | "OUTCOME_SALES";
+
+export type OptimizationGoal =
+  | "REACH"
+  | "IMPRESSIONS"
+  | "AD_RECALL_LIFT"
+  | "LINK_CLICKS"
+  | "LANDING_PAGE_VIEWS"
+  | "POST_ENGAGEMENT"
+  | "ENGAGED_USERS"
+  | "PAGE_LIKES"
+  | "THRUPLAY"
+  | "LEAD_GENERATION"
+  | "QUALITY_LEAD"
+  | "APP_INSTALLS"
+  | "IN_APP_VALUE"
+  | "OFFSITE_CONVERSIONS"
+  | "VALUE";
+
+export type AdFormat =
+  | "SHORT_VIDEO"
+  | "LONG_VIDEO"
+  | "SINGLE_IMAGE"
+  | "CAROUSEL"
+  | "STORY"
+  | "VIDEO"
+  | "COLLECTION"
+  | "SLIDESHOW"
+  | "INSTANT_EXPERIENCE";
+
+export type Placement =
+  | "AUTOMATIC"
+  | "FACEBOOK_FEED"
+  | "INSTAGRAM_FEED"
+  | "FACEBOOK_STORIES"
+  | "INSTAGRAM_STORIES"
+  | "REELS"
+  | "MESSENGER"
+  | "AUDIENCE_NETWORK"
+  | "FACEBOOK_RIGHT_COLUMN"
+  | "INSTAGRAM_EXPLORE";

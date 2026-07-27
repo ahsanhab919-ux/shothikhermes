@@ -1,0 +1,27 @@
+.fade-up[data-observe-fade-up=true] {
+  @apply opacity-0 translate-y-10 transition-all duration-500 ease-out;
+}
+.fade-up[data-observe-fade-up=true].active {
+  @apply opacity-100 translate-y-0;
+}
+
+.fade-down[data-observe-fade-down=true] {
+  @apply opacity-0 -translate-y-10 transition-all duration-500 ease-out;
+}
+.fade-down[data-observe-fade-down=true].active {
+  @apply opacity-100 translate-y-0;
+}
+
+.fade-left[data-observe-fade-left=true] {
+  @apply opacity-0 -translate-x-10 transition-all duration-500 ease-out;
+}
+.fade-left[data-observe-fade-left=true].active {
+  @apply opacity-100 translate-x-0;
+}
+
+.fade-right[data-observe-fade-right=true] {
+  @apply opacity-0 translate-x-10 transition-all duration-500 ease-out;
+}
+.fade-right[data-observe-fade-right=true].active {
+  @apply opacity-100 translate-x-0;
+}

@@ -1,0 +1,119 @@
+name: shothik-web-ci
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - "feat/**"
+      - "fix/**"
+      - "chore/**"
+      - "docs/**"
+      - "refactor/**"
+      - "test/**"
+  pull_request:
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+
+concurrency:
+  group: shothik-web-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate Web App
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      CI: true
+      NEXT_TELEMETRY_DISABLED: 1
+      NEXT_PUBLIC_CONVEX_URL: https://placeholder.convex.cloud
+      STRIPE_SECRET_KEY: sk_test_placeholder
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: pk_test_placeholder
+      CLERK_SECRET_KEY: sk_test_placeholder
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type-check
+        run: pnpm type-check
+
+      - name: Run test coverage
+        run: pnpm test:coverage
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage
+          if-no-files-found: ignore
+
+      - name: Build production bundle
+        run: pnpm build
+
+      - name: Verify health route contract files exist
+        run: |
+          test -f app/api/health/route.ts
+          test -f app/api/docs/swagger.json/route.ts
+
+  playwright-smoke:
+    name: Optional Playwright Smoke Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event_name == 'workflow_dispatch'
+
+    env:
+      CI: true
+      NEXT_TELEMETRY_DISABLED: 1
+      NEXT_PUBLIC_CONVEX_URL: https://placeholder.convex.cloud
+      STRIPE_SECRET_KEY: sk_test_placeholder
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: pk_test_placeholder
+      CLERK_SECRET_KEY: sk_test_placeholder
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps
+
+      - name: Run smoke suite if E2E tests exist
+        run: |
+          if [ -d e2e ] && find e2e -type f | grep -q .; then
+            pnpm exec playwright test
+          else
+            echo "No E2E tests found in ./e2e. Skipping smoke suite."
+          fi
